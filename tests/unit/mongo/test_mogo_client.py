@@ -53,9 +53,9 @@ def test_get_collection_should_use_mongomock_client(
     Ensures that the MongoClient instance is a mongomock.MongoClient, not pymongo.MongoClient.
     """
     client = PynencMongoClient.get_instance(mongo_conf)
-    assert isinstance(
-        client._client, mongomock.MongoClient
-    ), "MongoClient should be mocked with mongomock"
+    assert isinstance(client._client, mongomock.MongoClient), (
+        "MongoClient should be mocked with mongomock"
+    )
 
 
 def test_get_collection_with_indexes(
@@ -85,12 +85,12 @@ def test_index_creation_once(
 
     # Verify indexes are not recreated
     collection_key = f"{mongo_conf.mongo_db}.{collection_spec.name}"
-    assert (
-        collection_key in client._validated_collections
-    ), "Collection should be marked as validated"
-    assert (
-        collection1._collection is collection2._collection
-    ), "Same collection object should be returned"
+    assert collection_key in client._validated_collections, (
+        "Collection should be marked as validated"
+    )
+    assert collection1._collection is collection2._collection, (
+        "Same collection object should be returned"
+    )
 
 
 def test_retryable_collection_retry(

@@ -1,5 +1,5 @@
 import pickle
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
@@ -60,7 +60,7 @@ class MongoArgCache(BaseArgCache):
             {
                 "cache_key": cache_key,
                 "cached_data": pickle.dumps(value),
-                "created_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
             },
             upsert=True,
         )
@@ -90,7 +90,7 @@ class MongoArgCache(BaseArgCache):
             {
                 "cache_key": key,
                 "cached_data": value.encode("utf-8"),
-                "created_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
             },
             upsert=True,
         )

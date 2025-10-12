@@ -138,4 +138,3 @@ exclude_lines = [
     "^\\s*\\.\\.\\.\\s*$",  # ... ellipsis
     "if __name__ == .__main__.:",
 ]
-relative_files = true # to combine coverage data from multiple processes
