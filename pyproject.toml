@@ -55,8 +55,8 @@ dev = [
     "types-PyYAML==6.0.12.12",
     "pre-commit>=3.5.0",
     "types-requests>=2.32.0.20250602",
-    "fakeredis>=2.21.0",
-    "testcontainers[redis]>=4.13.0",
+    "mongomock>=4.3.0",
+    "testcontainers[mongodb]>=4.13.0",
 ]
 tests = [
     "pynenc[tests]>=0.1.0rc101.dev109",
