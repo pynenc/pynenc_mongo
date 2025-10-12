@@ -32,8 +32,12 @@ def extract_collection_specs(cls: type) -> list[CollectionSpec]:
                         name = None
                         indexes = []
                         for kw in subnode.keywords:
-                            if kw.arg == "name" and isinstance(kw.value, ast.Str):
-                                name = kw.value.s
+                            if (
+                                kw.arg == "name"
+                                and isinstance(kw.value, ast.Constant)
+                                and isinstance(kw.value.value, str)
+                            ):
+                                name = kw.value.value
                             elif kw.arg == "indexes" and isinstance(kw.value, ast.List):
                                 indexes = [None] * len(kw.value.elts)
                         if name:
