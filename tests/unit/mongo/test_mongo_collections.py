@@ -1,18 +1,17 @@
 import ast
 import inspect
-from typing import Type
 
 from pynenc_mongo.conf.config_mongo import ConfigMongo
 from pynenc_mongo.util.mongo_collections import CollectionSpec, MongoCollections
 
 
-def get_subclasses(cls: Type) -> list[Type]:
+def get_subclasses(cls: type) -> list[type]:
     """Recursively get all subclasses of a class."""
     subclasses = cls.__subclasses__()
     return subclasses + [sub for c in subclasses for sub in get_subclasses(c)]
 
 
-def extract_collection_specs(cls: Type) -> list[CollectionSpec]:
+def extract_collection_specs(cls: type) -> list[CollectionSpec]:
     """Extract CollectionSpec objects from @cached_property methods."""
     specs = []
     source = inspect.getsource(cls)
@@ -33,8 +32,12 @@ def extract_collection_specs(cls: Type) -> list[CollectionSpec]:
                         name = None
                         indexes = []
                         for kw in subnode.keywords:
-                            if kw.arg == "name" and isinstance(kw.value, ast.Str):
-                                name = kw.value.s
+                            if (
+                                kw.arg == "name"
+                                and isinstance(kw.value, ast.Constant)
+                                and isinstance(kw.value.value, str)
+                            ):
+                                name = kw.value.value
                             elif kw.arg == "indexes" and isinstance(kw.value, ast.List):
                                 indexes = [None] * len(kw.value.elts)
                         if name:
@@ -54,9 +57,9 @@ def test_collection_specs() -> None:
 
         specs = extract_collection_specs(cls)
         for spec in specs:
-            assert spec.name.startswith(
-                prefix_value
-            ), f"Collection '{spec.name}' in {cls.__name__} does not start with prefix '{prefix_value}'"
-            assert (
-                len(spec.indexes) > 0
-            ), f"Collection '{spec.name}' in {cls.__name__} has no indexes defined"
+            assert spec.name.startswith(prefix_value), (
+                f"Collection '{spec.name}' in {cls.__name__} does not start with prefix '{prefix_value}'"
+            )
+            assert len(spec.indexes) > 0, (
+                f"Collection '{spec.name}' in {cls.__name__} has no indexes defined"
+            )

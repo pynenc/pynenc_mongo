@@ -1,6 +1,7 @@
+from collections.abc import Callable, Iterator
 from functools import cached_property
 from time import time
-from typing import TYPE_CHECKING, Callable, Iterator, Optional
+from typing import TYPE_CHECKING
 
 from pynenc.call import Call
 from pynenc.exceptions import (
@@ -423,7 +424,7 @@ class MongoOrchestrator(BaseOrchestrator):
                 }
             )
 
-    def get_invocation_pending_timer(self, invocation_id: str) -> Optional[float]:
+    def get_invocation_pending_timer(self, invocation_id: str) -> float | None:
         """Retrieves the pending timer for a specific invocation."""
         doc = self.cols.orchestrator_invocations.find_one(
             {"invocation_id": invocation_id}

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import cached_property
 from typing import TYPE_CHECKING
 
@@ -56,7 +56,7 @@ class MongoBroker(BaseBroker):
             {
                 "invocation_id": invocation.invocation_id,
                 "invocation_json": invocation.to_json(),
-                "created_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
             }
         )
 
@@ -73,7 +73,7 @@ class MongoBroker(BaseBroker):
             {
                 "invocation_id": inv.invocation_id,
                 "invocation_json": inv.to_json(),
-                "created_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
             }
             for inv in invocations
         ]

@@ -1,8 +1,9 @@
 import threading
 import time
+from collections.abc import Callable
 from enum import StrEnum, auto
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from bson.objectid import ObjectId
 from pymongo import MongoClient as PyMongoClient

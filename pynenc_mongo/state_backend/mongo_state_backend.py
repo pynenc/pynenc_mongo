@@ -1,5 +1,6 @@
+from collections.abc import Iterator
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from pymongo import ASCENDING
 from pymongo.errors import DuplicateKeyError

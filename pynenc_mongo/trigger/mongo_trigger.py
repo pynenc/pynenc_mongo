@@ -1,6 +1,7 @@
-from datetime import datetime, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from functools import cached_property
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING, Optional
 
 from pymongo.errors import DuplicateKeyError
 from pymongo.operations import ReplaceOne
@@ -44,7 +45,7 @@ class MongoTrigger(BaseTrigger):
             upsert=True,
         )
 
-    def get_condition(self, condition_id: str) -> Optional[TriggerCondition]:
+    def get_condition(self, condition_id: str) -> TriggerCondition | None:
         doc = self.cols.trg_conditions.find_one({"condition_id": condition_id})
         if doc:
             return TriggerCondition.from_json(doc["condition_json"], self.app)
@@ -180,7 +181,7 @@ class MongoTrigger(BaseTrigger):
         self, trigger_id: str, valid_condition_id: str, expiration_seconds: int = 60
     ) -> bool:
         claim_key = f"{trigger_id}:{valid_condition_id}"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expiration = now + timedelta(seconds=expiration_seconds)
 
         try:
@@ -207,7 +208,7 @@ class MongoTrigger(BaseTrigger):
     def claim_trigger_run(
         self, trigger_run_id: str, expiration_seconds: int = 60
     ) -> bool:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expiration = now + timedelta(seconds=expiration_seconds)
 
         try:
