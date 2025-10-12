@@ -20,21 +20,16 @@ jobs:
         with:
           python-version: "3.11.7"
 
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
         with:
-          version: 1.7.0
-          virtualenvs-create: true
-          virtualenvs-in-project: true
+          version: "latest"
 
-      - name: Cache Poetry dependencies
+      - name: Cache uv
         uses: actions/cache@v4
         with:
-          path: .venv
-          key: pydeps-${{ hashFiles('**/poetry.lock') }}
-
-      - name: Install dependencies
-        run: poetry install --no-interaction
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml') }}
 
       - name: Check if there is a parent commit
         id: check-parent-commit
@@ -47,33 +42,57 @@ jobs:
         uses: salsify/action-detect-and-tag-new-version@v2.0.1
         with:
           version-command: |
-            bash -o pipefail -c "poetry version | awk '{ print \$2 }'"
+            uv version --short
 
       - name: Bump version for developmental release
         if: ${{ ! steps.check-version.outputs.tag }}
         run: |
-          poetry version patch &&
-          version=$(poetry version | awk '{ print $2 }') &&
-          poetry version $version.dev.$(date +%s)
+          uv version --bump patch
+          current_version=$(uv version --short)
+          dev_version="${current_version}.dev$(date +%s)"
+          uv version $dev_version
+          echo "VERSION=$dev_version" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        run: uv sync
 
       - name: Build package
-        run: |
-          poetry build --ansi
+        run: uv build
 
       - name: Publish package on PyPI
         if: steps.check-version.outputs.tag
-        uses: pypa/gh-action-pypi-publish@v1.8.6
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_TOKEN }}
+        run: uv publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
       - name: Publish package on TestPyPI
         if: ${{! steps.check-version.outputs.tag }}
-        uses: pypa/gh-action-pypi-publish@v1.8.6
-        with:
-          user: __token__
-          password: ${{ secrets.TEST_PYPI_TOKEN }}
-          repository-url: https://test.pypi.org/legacy/
+        run: uv publish --index testpypi
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}
+
+      - name: Add package link to job summary (PyPI)
+        if: steps.check-version.outputs.tag
+        run: |
+          echo "### 📦 Package Published to PyPI" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Version: \`${{ steps.check-version.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View on PyPI](https://pypi.org/project/pynenc-mongo/${{ steps.check-version.outputs.tag }}/)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Add package link to job summary (TestPyPI)
+        if: ${{! steps.check-version.outputs.tag }}
+        run: |
+          echo "### 📦 Package Published to TestPyPI" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Version: \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View on TestPyPI](https://test.pypi.org/project/pynenc-mongo/${{ env.VERSION }}/)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Install command:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "pip install --index-url https://test.pypi.org/simple/ pynenc-mongo==${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Publish the release notes
         uses: release-drafter/release-drafter@v5.23.0
