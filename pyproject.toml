@@ -1,6 +1,6 @@
 [project]
 name = "pynenc-mongo"
-version = "0.1.4"
+version = "0.1.5"
 description = "MongoDB plugging for pynenc, a distributed task queue for Python."
 authors = [{ name = "Luis Diaz", email = "code.luis.diaz@proton.me" }]
 license = { text = "MIT License" }
