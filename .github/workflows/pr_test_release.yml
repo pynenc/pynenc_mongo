@@ -53,5 +53,5 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `📦 PR version deployed to TestPyPI\n\nYou can install this version with:\n\`\`\`bash\npip install --index-url https://test.pypi.org/simple/ pynenc==${{ env.VERSION }}\n\`\`\``
+              body: `📦 PR version deployed to TestPyPI\n\nYou can install this version with:\n\`\`\`bash\npip install --index-url https://test.pypi.org/simple/ pynenc-mongo==${{ env.VERSION }}\n\`\`\``
             })
