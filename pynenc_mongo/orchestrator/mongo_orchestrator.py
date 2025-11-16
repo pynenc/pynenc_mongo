@@ -1,5 +1,5 @@
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from functools import cached_property
 from time import sleep, time
 from typing import TYPE_CHECKING
@@ -599,14 +599,19 @@ class MongoOrchestrator(BaseOrchestrator):
         runner_id = runner_ctx.runner_id
         runner_json = runner_ctx.to_json()
 
-        self.cols.orchestrator_runner_heartbeats.upsert_document(
+        # Use update_one with $setOnInsert to preserve creation_timestamp on updates
+        self.cols.orchestrator_runner_heartbeats.update_one(
             {"runner_id": runner_id},
             {
-                "runner_id": runner_id,
-                "runner_context_json": runner_json,
-                "creation_timestamp": current_time,
-                "last_heartbeat": current_time,
+                "$set": {
+                    "runner_context_json": runner_json,
+                    "last_heartbeat": current_time,
+                },
+                "$setOnInsert": {
+                    "creation_timestamp": current_time,
+                },
             },
+            upsert=True,
         )
 
     def get_active_runners(self) -> list[ActiveRunnerInfo]:
@@ -653,17 +658,20 @@ class MongoOrchestrator(BaseOrchestrator):
         )
 
     def get_pending_invocations_for_recovery(self) -> Iterator[str]:
-        """Retrieve invocation IDs stuck in PENDING status beyond the allowed time."""
-        from datetime import UTC, datetime
+        """
+        Retrieve invocation IDs stuck in PENDING status beyond the allowed time.
 
+        :return: Iterator of invocation IDs that have been pending longer than max_pending_seconds
+        """
         max_pending_seconds = self.app.conf.max_pending_seconds
-        current_time = datetime.now(UTC)
-        cutoff_time = current_time - timedelta(seconds=max_pending_seconds)
+        current_time = time()
+        cutoff_timestamp = current_time - max_pending_seconds
+        cutoff_time = datetime.fromtimestamp(cutoff_timestamp, tz=UTC)
 
         docs = self.cols.orchestrator_invocations.find(
             {
                 "status": InvocationStatus.PENDING.value,
-                "status_timestamp": {"$lte": cutoff_time},
+                "status_timestamp": {"$lt": cutoff_time},
             }
         )
 
