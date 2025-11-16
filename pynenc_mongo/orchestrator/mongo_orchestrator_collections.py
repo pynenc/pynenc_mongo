@@ -79,3 +79,15 @@ class OrchestratorCollections(MongoCollections):
             ],
         )
         return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def orchestrator_runner_heartbeats(self) -> "RetryableCollection":
+        spec = CollectionSpec(
+            name="orchestrator_runner_heartbeats",
+            indexes=[
+                IndexModel([("runner_id", ASCENDING)], unique=True),
+                IndexModel([("last_heartbeat", ASCENDING)]),
+                IndexModel([("creation_timestamp", ASCENDING)]),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)

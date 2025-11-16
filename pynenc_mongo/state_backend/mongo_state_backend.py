@@ -35,9 +35,6 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
         self.cols = StateBackendCollections(self.conf)
-        self.app.logger.warning(
-            f"Using MongoDB database {self.conf.mongo_db} for state backend."
-        )
 
     @cached_property
     def conf(self) -> ConfigStateBackendMongo:
@@ -82,7 +79,7 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
             }
         )
 
-    def _upsert_invocations(self, invocations: list["DistributedInvocation"]) -> None:
+    def upsert_invocations(self, invocations: list["DistributedInvocation"]) -> None:
         """Updates or inserts multiple invocations."""
         for invocation in invocations:
             self.cols.state_backend_invocations.insert_or_ignore(
@@ -111,7 +108,7 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
                     {
                         "invocation_id": invocation_id,
                         "history_timestamp": invocation_history._timestamp,
-                        "history_status": invocation_history.status,
+                        "history_status": invocation_history.status_record.status,
                         "history_json": invocation_history.to_json(),
                     }
                 )

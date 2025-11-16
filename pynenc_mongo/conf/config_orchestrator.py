@@ -7,4 +7,4 @@ class ConfigOrchestratorMongo(ConfigOrchestrator, ConfigMongo):
     """Specific Configuration for the Mongo Orchestrator"""
 
     auto_final_invocation_purge_hours: int = 24
-    max_pending_seconds: int = 3600
+    ownership_consensus_wait_seconds: float = 0.1

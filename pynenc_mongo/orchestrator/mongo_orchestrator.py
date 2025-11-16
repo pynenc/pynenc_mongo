@@ -1,16 +1,24 @@
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from functools import cached_property
-from time import time
+from time import sleep, time
 from typing import TYPE_CHECKING
 
+from pymongo import ReturnDocument
 from pynenc.call import Call
 from pynenc.exceptions import (
     CycleDetectedError,
-    InvocationOnFinalStatusError,
-    PendingInvocationLockError,
+    InvocationStatusError,
+    InvocationStatusRaceConditionError,
 )
-from pynenc.invocation.status import InvocationStatus
+from pynenc.invocation.status import (
+    InvocationStatus,
+    InvocationStatusRecord,
+    get_status_definition,
+    status_record_transition,
+)
 from pynenc.orchestrator.base_orchestrator import (
+    ActiveRunnerInfo,
     BaseBlockingControl,
     BaseCycleControl,
     BaseOrchestrator,
@@ -24,6 +32,7 @@ from pynenc_mongo.orchestrator.mongo_orchestrator_collections import (
 if TYPE_CHECKING:
     from pynenc.app import Pynenc
     from pynenc.invocation.dist_invocation import DistributedInvocation
+    from pynenc.runner.runner_context import RunnerContext
     from pynenc.task import Task
     from pynenc.types import Params, Result
 
@@ -285,22 +294,27 @@ class MongoOrchestrator(BaseOrchestrator):
         return self._blocking_control
 
     def _register_new_invocations(
-        self, invocations: list["DistributedInvocation[Params, Result]"]
-    ) -> None:
+        self,
+        invocations: list["DistributedInvocation[Params, Result]"],
+        owner_id: str | None = None,
+    ) -> InvocationStatusRecord:
         """Register new invocations with status Registered if they don't exist yet."""
+        status_record = InvocationStatusRecord(InvocationStatus.REGISTERED, owner_id)
         for invocation in invocations:
             self.cols.orchestrator_invocations.insert_or_ignore(
                 {
                     "invocation_id": invocation.invocation_id,
                     "task_id": invocation.task.task_id,
                     "call_id": invocation.call_id,
-                    "status": InvocationStatus.REGISTERED.value,
+                    "status": status_record.status.value,
+                    "status_owner_id": status_record.owner_id,
+                    "status_timestamp": status_record.timestamp,
                     "retry_count": 0,
-                    "pending_start_time": None,
-                    "pre_pending_status": None,
                     "auto_purge_timestamp": None,
+                    "ownership_claims": [],
                 }
             )
+        return status_record
 
     def get_existing_invocations(
         self,
@@ -372,43 +386,133 @@ class MongoOrchestrator(BaseOrchestrator):
             is not None
         )
 
-    def _set_invocation_status(
-        self,
-        invocation_id: str,
-        status: InvocationStatus,
-    ) -> None:
+    def _validate_ownership_acquisition(
+        self, invocation_id: str, owner_id: str
+    ) -> bool:
+        """
+        Validate ownership acquisition using time-based consensus.
+
+        This implements a pseudo-atomic ownership protocol:
+        1. Add owner_id to ownership_claims array
+        2. Wait for consensus period
+        3. Check if our owner_id is first in the array
+
+        :param invocation_id: ID of the invocation to claim
+        :param owner_id: ID of the worker attempting to claim ownership
+        :return: True if ownership successfully acquired, False otherwise
+        """
+        # Step 1: Push our owner_id to the claims array
+        self.cols.orchestrator_invocations.update_one(
+            {"invocation_id": invocation_id}, {"$push": {"ownership_claims": owner_id}}
+        )
+
+        # Step 2: Wait for consensus period
+        sleep(self.conf.ownership_consensus_wait_seconds)
+
+        # Step 3: Check if we won the race
+        doc = self.cols.orchestrator_invocations.find_one(
+            {"invocation_id": invocation_id}
+        )
+
+        if not doc:
+            raise KeyError(f"Invocation ID {invocation_id} not found")
+
+        ownership_claims = doc.get("ownership_claims", [])
+
+        # We win if we're first in the list
+        return ownership_claims and ownership_claims[0] == owner_id
+
+    def _release_ownership(self, invocation_id: str) -> None:
+        """
+        Release ownership by clearing the ownership_claims array.
+
+        :param invocation_id: ID of the invocation to release
+        """
+        self.cols.orchestrator_invocations.update_one(
+            {"invocation_id": invocation_id}, {"$set": {"ownership_claims": []}}
+        )
+
+    def _atomic_status_transition(
+        self, invocation_id: str, status: InvocationStatus, owner_id: str | None = None
+    ) -> InvocationStatusRecord:
         """Set the status of an invocation by ID."""
         doc = self.cols.orchestrator_invocations.find_one(
             {"invocation_id": invocation_id}
         )
         if not doc:
             raise KeyError(f"Invocation ID {invocation_id} not found")
-        prev_status = InvocationStatus(doc["status"])
-        if prev_status == status:
-            if prev_status == InvocationStatus.PENDING:
-                raise PendingInvocationLockError(invocation_id)
-            self.app.logger.debug(
-                f"Invocation {invocation_id} already in status {status}, no change"
-            )
-            return
-        if prev_status.is_final():
-            raise InvocationOnFinalStatusError(invocation_id, prev_status, status)
-
-        update_doc: dict = {"status": status.value}
-        if status == InvocationStatus.PENDING:
-            update_doc["pre_pending_status"] = prev_status.value
-            update_doc["pending_start_time"] = time()
-        else:
-            update_doc["pre_pending_status"] = None
-            update_doc["pending_start_time"] = None
-
-        self.cols.orchestrator_invocations.update_one(
-            {"invocation_id": invocation_id}, {"$set": update_doc}
+        prev_status_record = InvocationStatusRecord(
+            InvocationStatus(doc["status"]),
+            doc["status_owner_id"],
+            doc["status_timestamp"],
         )
 
-    def _set_invocation_pending_status(self, invocation_id: str) -> None:
-        """Set an invocation to pending status."""
-        self._set_invocation_status(invocation_id, InvocationStatus.PENDING)
+        # Validate the transition
+        new_record = status_record_transition(prev_status_record, status, owner_id)
+
+        # Check ownership acquisition if needed: pseudo-atomic protocol
+        new_def = get_status_definition(status)
+        if new_def.acquires_ownership:
+            if not owner_id:
+                raise InvocationStatusError(
+                    f"Owner ID must be provided when transitioning to status {status}"
+                )
+            if not self._validate_ownership_acquisition(invocation_id, owner_id):
+                raise InvocationStatusRaceConditionError(
+                    invocation_id=invocation_id,
+                    previous_status_record=prev_status_record,
+                    expected_status_record=new_record,
+                    actual_status_record=self.get_invocation_status_record(
+                        invocation_id
+                    ),
+                )
+
+        update_doc: dict = {
+            "status": new_record.status.value,
+            "status_owner_id": new_record.owner_id,
+            "status_timestamp": new_record.timestamp,
+        }
+
+        if prev_doc_on_update := self.cols.orchestrator_invocations.find_one_and_update(
+            {"invocation_id": invocation_id},
+            {"$set": update_doc},
+            return_document=ReturnDocument.BEFORE,
+        ):
+            prev_status_record_on_update = InvocationStatusRecord(
+                InvocationStatus(prev_doc_on_update["status"]),
+                prev_doc_on_update["status_owner_id"],
+                prev_doc_on_update["status_timestamp"],
+            )
+            if prev_status_record != prev_status_record_on_update:
+                error_msg = (
+                    f"We observed a race condition when updating invocation {invocation_id} status from {prev_status_record} to {status}. "
+                    f"The previous status record used for the update was {prev_status_record}, but the actual status record on update was {prev_status_record_on_update}. "
+                    "Plese upgrade to a newer version of mongoDB that supports atomic updates and/or transactions. "
+                )
+                try:
+                    _ = status_record_transition(
+                        prev_status_record_on_update, status, owner_id
+                    )
+                    self.app.logger.warning(
+                        error_msg
+                        + "Continuing without raising an error, because the transition of states is still valid. "
+                    )
+                except InvocationStatusError as ex:
+                    self.app.logger.error(
+                        f"{error_msg} the trasition is invalid and we cannot continue {ex}"
+                    )
+                    raise InvocationStatusRaceConditionError(
+                        invocation_id=invocation_id,
+                        previous_status_record=prev_status_record,
+                        expected_status_record=prev_status_record,
+                        actual_status_record=prev_status_record_on_update,
+                    ) from ex
+
+        # Check if this transition releases ownership
+        if new_def.releases_ownership:
+            self._release_ownership(invocation_id)
+
+        return new_record
 
     def index_arguments_for_concurrency_control(
         self,
@@ -423,13 +527,6 @@ class MongoOrchestrator(BaseOrchestrator):
                     "arg_value": value,
                 }
             )
-
-    def get_invocation_pending_timer(self, invocation_id: str) -> float | None:
-        """Retrieves the pending timer for a specific invocation."""
-        doc = self.cols.orchestrator_invocations.find_one(
-            {"invocation_id": invocation_id}
-        )
-        return doc.get("pending_start_time") if doc else None
 
     def set_up_invocation_auto_purge(self, invocation_id: str) -> None:
         """Set up invocation for auto-purging by setting the auto_purge_timestamp."""
@@ -454,31 +551,20 @@ class MongoOrchestrator(BaseOrchestrator):
                 {"invocation_id": invocation_id}
             )
 
-    def get_invocation_status(self, invocation_id: str) -> InvocationStatus:
+    def get_invocation_status_record(
+        self, invocation_id: str
+    ) -> InvocationStatusRecord:
         """Get the current status of an invocation by ID, handling pending timeouts."""
         doc = self.cols.orchestrator_invocations.find_one(
             {"invocation_id": invocation_id}
         )
         if not doc:
             raise KeyError(f"Invocation ID {invocation_id} not found")
-        status = InvocationStatus(doc["status"])
-        if status == InvocationStatus.PENDING:
-            pending_start_time = doc.get("pending_start_time")
-            pre_pending_status = doc.get("pre_pending_status")
-            if pending_start_time and pre_pending_status:
-                elapsed = time() - pending_start_time
-                if elapsed > self.app.conf.max_pending_seconds:
-                    self.cols.orchestrator_invocations.update_one(
-                        {"invocation_id": invocation_id},
-                        {
-                            "$set": {
-                                "status": pre_pending_status,
-                                "pending_start_time": None,
-                            }
-                        },
-                    )
-                    return InvocationStatus(pre_pending_status)
-        return status
+        return InvocationStatusRecord(
+            InvocationStatus(doc["status"]),
+            doc["status_owner_id"],
+            doc["status_timestamp"],
+        )
 
     def increment_invocation_retries(self, invocation_id: str) -> None:
         """Increment the retry count for an invocation by ID."""
@@ -494,7 +580,7 @@ class MongoOrchestrator(BaseOrchestrator):
         return doc.get("retry_count", 0) if doc else 0
 
     def filter_by_status(
-        self, invocation_ids: list[str], status_filter: set["InvocationStatus"]
+        self, invocation_ids: list[str], status_filter: frozenset["InvocationStatus"]
     ) -> list[str]:
         """Filter invocations by status by ID."""
         if not invocation_ids or not status_filter:
@@ -506,6 +592,83 @@ class MongoOrchestrator(BaseOrchestrator):
             }
         )
         return [doc["invocation_id"] for doc in docs]
+
+    def register_runner_heartbeat(self, runner_ctx: "RunnerContext") -> None:
+        """Register or update a runner's heartbeat timestamp."""
+        current_time = time()
+        runner_id = runner_ctx.runner_id
+        runner_json = runner_ctx.to_json()
+
+        self.cols.orchestrator_runner_heartbeats.upsert_document(
+            {"runner_id": runner_id},
+            {
+                "runner_id": runner_id,
+                "runner_context_json": runner_json,
+                "creation_timestamp": current_time,
+                "last_heartbeat": current_time,
+            },
+        )
+
+    def get_active_runners(self) -> list[ActiveRunnerInfo]:
+        """Retrieve all active runners with heartbeat information."""
+        from pynenc.runner.runner_context import RunnerContext
+
+        timeout_seconds = self.conf.runner_heartbeat_timeout_minutes * 60
+        current_time = time()
+        cutoff_time = current_time - timeout_seconds
+
+        docs = self.cols.orchestrator_runner_heartbeats.find(
+            {"last_heartbeat": {"$gte": cutoff_time}}
+        ).sort("creation_timestamp", 1)
+
+        active_runners = []
+        for doc in docs:
+            try:
+                runner_ctx = RunnerContext.from_json(doc["runner_context_json"])
+                active_runners.append(
+                    ActiveRunnerInfo(
+                        runner_ctx=runner_ctx,
+                        creation_time=datetime.fromtimestamp(
+                            doc["creation_timestamp"], tz=UTC
+                        ),
+                        last_heartbeat=datetime.fromtimestamp(
+                            doc["last_heartbeat"], tz=UTC
+                        ),
+                    )
+                )
+            except ValueError:
+                # Skip invalid runner contexts
+                continue
+
+        return active_runners
+
+    def cleanup_inactive_runners(self) -> None:
+        """Remove runners that haven't sent a heartbeat within the timeout period."""
+        timeout_seconds = self.conf.runner_heartbeat_timeout_minutes * 60
+        current_time = time()
+        cutoff_time = current_time - timeout_seconds
+
+        self.cols.orchestrator_runner_heartbeats.delete_many(
+            {"last_heartbeat": {"$lt": cutoff_time}}
+        )
+
+    def get_pending_invocations_for_recovery(self) -> Iterator[str]:
+        """Retrieve invocation IDs stuck in PENDING status beyond the allowed time."""
+        from datetime import UTC, datetime
+
+        max_pending_seconds = self.app.conf.max_pending_seconds
+        current_time = datetime.now(UTC)
+        cutoff_time = current_time - timedelta(seconds=max_pending_seconds)
+
+        docs = self.cols.orchestrator_invocations.find(
+            {
+                "status": InvocationStatus.PENDING.value,
+                "status_timestamp": {"$lte": cutoff_time},
+            }
+        )
+
+        for doc in docs:
+            yield doc["invocation_id"]
 
     def purge(self) -> None:
         """Clear all orchestrator state."""
