@@ -17,8 +17,8 @@ from pynenc.invocation.status import (
     get_status_definition,
     status_record_transition,
 )
+from pynenc.orchestrator.atomic_service import ActiveRunnerInfo
 from pynenc.orchestrator.base_orchestrator import (
-    ActiveRunnerInfo,
     BaseBlockingControl,
     BaseCycleControl,
     BaseOrchestrator,
@@ -599,7 +599,6 @@ class MongoOrchestrator(BaseOrchestrator):
         runner_id = runner_ctx.runner_id
         runner_json = runner_ctx.to_json()
 
-        # Use update_one with $setOnInsert to preserve creation_timestamp on updates
         self.cols.orchestrator_runner_heartbeats.update_one(
             {"runner_id": runner_id},
             {
@@ -609,9 +608,20 @@ class MongoOrchestrator(BaseOrchestrator):
                 },
                 "$setOnInsert": {
                     "creation_timestamp": current_time,
+                    "last_service_start": None,
+                    "last_service_end": None,
                 },
             },
             upsert=True,
+        )
+
+    def record_atomic_service_execution(
+        self, runner_ctx: "RunnerContext", start_time: datetime, end_time: datetime
+    ) -> None:
+        """Record the latest atomic service execution window for a runner."""
+        self.cols.orchestrator_runner_heartbeats.update_one(
+            {"runner_id": runner_ctx.runner_id},
+            {"$set": {"last_service_start": start_time, "last_service_end": end_time}},
         )
 
     def get_active_runners(self) -> list[ActiveRunnerInfo]:
@@ -628,22 +638,30 @@ class MongoOrchestrator(BaseOrchestrator):
 
         active_runners = []
         for doc in docs:
-            try:
-                runner_ctx = RunnerContext.from_json(doc["runner_context_json"])
-                active_runners.append(
-                    ActiveRunnerInfo(
-                        runner_ctx=runner_ctx,
-                        creation_time=datetime.fromtimestamp(
-                            doc["creation_timestamp"], tz=UTC
-                        ),
-                        last_heartbeat=datetime.fromtimestamp(
-                            doc["last_heartbeat"], tz=UTC
-                        ),
-                    )
+            runner_ctx = RunnerContext.from_json(doc["runner_context_json"])
+
+            # MongoDB stores datetimes as naive UTC - make them aware
+            last_service_start = doc.get("last_service_start")
+            if last_service_start is not None and last_service_start.tzinfo is None:
+                last_service_start = last_service_start.replace(tzinfo=UTC)
+
+            last_service_end = doc.get("last_service_end")
+            if last_service_end is not None and last_service_end.tzinfo is None:
+                last_service_end = last_service_end.replace(tzinfo=UTC)
+
+            active_runners.append(
+                ActiveRunnerInfo(
+                    runner_ctx=runner_ctx,
+                    creation_time=datetime.fromtimestamp(
+                        doc["creation_timestamp"], tz=UTC
+                    ),
+                    last_heartbeat=datetime.fromtimestamp(
+                        doc["last_heartbeat"], tz=UTC
+                    ),
+                    last_service_start=last_service_start,
+                    last_service_end=last_service_end,
                 )
-            except ValueError:
-                # Skip invalid runner contexts
-                continue
+            )
 
         return active_runners
 

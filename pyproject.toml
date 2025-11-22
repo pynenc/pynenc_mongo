@@ -1,6 +1,6 @@
 [project]
 name = "pynenc-mongo"
-version = "0.1.5"
+version = "0.1.6"
 description = "MongoDB plugging for pynenc, a distributed task queue for Python."
 authors = [{ name = "Luis Diaz", email = "code.luis.diaz@proton.me" }]
 license = { text = "MIT License" }
@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "pynenc>=0.1.0rc101.dev122",
+    "pynenc>=0.1.0rc101.dev126",
     "pymongo>=3.12.2,<3.13",
 ]
 
@@ -59,10 +59,10 @@ dev = [
     "testcontainers[mongodb]>=4.13.0",
 ]
 tests = [
-    "pynenc[tests]>=0.1.0rc101.dev121",
+    "pynenc[tests]>=0.1.0rc101.dev126",
 ]
 monitor = [
-    "pynenc[monitor]>=0.1.0rc101.dev121",
+    "pynenc[monitor]>=0.1.0rc101.dev126",
 ]
 docs = [
     "sphinx>=7.0",

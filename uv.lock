@@ -947,7 +947,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/97/79/9382c00183979e6ce
 
 [[package]]
 name = "pynenc"
-version = "0.1.0rc101.dev122"
+version = "0.1.0rc101.dev126"
 source = { registry = "https://test.pypi.org/simple/" }
 dependencies = [
     { name = "cistell" },
@@ -956,9 +956,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://test-files.pythonhosted.org/packages/29/a5/dd03c086d9bdc86df5556a0f683846047801155dfceaf6c3c7bad1ac0387/pynenc-0.1.0rc101.dev122.tar.gz", hash = "sha256:78063a25f8ed1118da5beb7e67e1a7ed908abffd6bbc79f6b7e8bff8321dbd89", size = 1640485, upload-time = "2025-11-22T09:02:26.236Z" }
+sdist = { url = "https://test-files.pythonhosted.org/packages/77/8e/dffa739bb57e9d01b57e5245e5badb6e91afa46f6dbd67f8de48e875d994/pynenc-0.1.0rc101.dev126.tar.gz", hash = "sha256:4d3a1713c6eaba42dbe175a6e00453fd878659790148f5167cc6808e5d395143", size = 1644955, upload-time = "2025-11-22T20:30:31.036Z" }
 wheels = [
-    { url = "https://test-files.pythonhosted.org/packages/2d/a2/2c97cf5e7e325f59ef85b2dbf8639f82f78c44dac05f525a40ffb1827e97/pynenc-0.1.0rc101.dev122-py3-none-any.whl", hash = "sha256:fa27e381c0470b15251895d55f36526ec2962f40ded0898209cb1bafc22548ad", size = 479944, upload-time = "2025-11-22T09:02:24.043Z" },
+    { url = "https://test-files.pythonhosted.org/packages/d5/cd/9926d463e838e1661ef7d8874b690f5d99528cbffbb7e050378046eadd13/pynenc-0.1.0rc101.dev126-py3-none-any.whl", hash = "sha256:0cb6d409f830a7793b14bdbfedc927c5052ac7317b75d8fddaf3511bf2b02b0a", size = 485361, upload-time = "2025-11-22T20:30:29.044Z" },
 ]
 
 [package.optional-dependencies]
@@ -984,7 +984,7 @@ tests = [
 
 [[package]]
 name = "pynenc-mongo"
-version = "0.1.5"
+version = "0.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "pymongo" },
@@ -1025,7 +1025,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "pymongo", specifier = ">=3.12.2,<3.13" },
-    { name = "pynenc", specifier = ">=0.1.0rc101.dev122", index = "https://test.pypi.org/simple/" },
+    { name = "pynenc", specifier = ">=0.1.0rc101.dev126", index = "https://test.pypi.org/simple/" },
 ]
 
 [package.metadata.requires-dev]
@@ -1052,8 +1052,8 @@ docs = [
     { name = "sphinx-design", specifier = ">=0.5.0" },
     { name = "sphinx-inline-tabs", specifier = ">=2023.4.21" },
 ]
-monitor = [{ name = "pynenc", extras = ["monitor"], specifier = ">=0.1.0rc101.dev121", index = "https://test.pypi.org/simple/" }]
-tests = [{ name = "pynenc", extras = ["tests"], specifier = ">=0.1.0rc101.dev121", index = "https://test.pypi.org/simple/" }]
+monitor = [{ name = "pynenc", extras = ["monitor"], specifier = ">=0.1.0rc101.dev126", index = "https://test.pypi.org/simple/" }]
+tests = [{ name = "pynenc", extras = ["tests"], specifier = ">=0.1.0rc101.dev126", index = "https://test.pypi.org/simple/" }]
 
 [[package]]
 name = "pytest"
