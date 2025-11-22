@@ -135,9 +135,22 @@ class MongoTrigger(BaseTrigger):
         return conditions
 
     def get_last_cron_execution(self, condition_id: str) -> datetime | None:
+        """
+        Get the last execution time for a cron condition.
+
+        :param condition_id: ID of the condition to check
+        :return: Last execution time in UTC, or None if never executed
+        """
         doc = self.cols.trg_conditions.find_one({"condition_id": condition_id})
         if doc and doc.get("last_cron_execution"):
-            return doc["last_cron_execution"]
+            dt = doc["last_cron_execution"]
+            # Ensure datetime is UTC-aware
+            if dt.tzinfo is None:
+                # Naive datetime - assume it's UTC and make it aware
+                return dt.replace(tzinfo=UTC)
+            else:
+                # Already aware - convert to UTC
+                return dt.astimezone(UTC)
         return None
 
     def store_last_cron_execution(
@@ -146,14 +159,34 @@ class MongoTrigger(BaseTrigger):
         execution_time: datetime,
         expected_last_execution: datetime | None = None,
     ) -> bool:
+        """
+        Store the last execution time for a cron condition with optimistic locking.
+
+        :param condition_id: ID of the condition
+        :param execution_time: Time of execution in UTC
+        :param expected_last_execution: Expected current value for optimistic locking
+        :return: True if update succeeded, False if another process won the race
+        """
         filter_doc: dict = {"condition_id": condition_id}
         if expected_last_execution is not None:
+            # Ensure expected_last_execution is UTC-aware for comparison
+            if expected_last_execution.tzinfo is None:
+                expected_last_execution = expected_last_execution.replace(tzinfo=UTC)
+            else:
+                expected_last_execution = expected_last_execution.astimezone(UTC)
             filter_doc["last_cron_execution"] = expected_last_execution
         else:
             filter_doc["$or"] = [
                 {"last_cron_execution": None},
                 {"last_cron_execution": {"$exists": False}},
             ]
+
+        # Ensure execution_time is UTC-aware
+        if execution_time.tzinfo is None:
+            execution_time = execution_time.replace(tzinfo=UTC)
+        else:
+            execution_time = execution_time.astimezone(UTC)
+
         result = self.cols.trg_conditions.update_one(
             filter_doc, {"$set": {"last_cron_execution": execution_time}}
         )
