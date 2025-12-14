@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import datetime
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -123,6 +124,87 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
             {"invocation_id": invocation_id}
         ).sort("history_timestamp", ASCENDING)
         return [InvocationHistory.from_json(doc["history_json"]) for doc in docs]
+
+    def iter_invocations_in_timerange(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        batch_size: int = 100,
+    ) -> Iterator[list[str]]:
+        """
+        Iterate over invocation IDs that have history within time range.
+
+        Uses MongoDB's native cursor with batch_size for efficient pagination.
+
+        :param start_time: Start of time range (inclusive)
+        :param end_time: End of time range (inclusive)
+        :param batch_size: Number of invocation IDs per batch
+        :return: Iterator yielding batches of invocation IDs
+        """
+        # Use aggregation to get distinct invocation_ids with pagination
+        pipeline = [
+            {
+                "$match": {
+                    "history_timestamp": {
+                        "$gte": start_time,
+                        "$lte": end_time,
+                    }
+                }
+            },
+            {"$group": {"_id": "$invocation_id"}},
+            {"$sort": {"_id": ASCENDING}},
+        ]
+
+        cursor = self.cols.state_backend_history.aggregate(pipeline)
+        batch: list[str] = []
+
+        for doc in cursor:
+            batch.append(doc["_id"])
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+        if batch:
+            yield batch
+
+    def iter_history_in_timerange(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        batch_size: int = 100,
+    ) -> Iterator[list["InvocationHistory"]]:
+        """
+        Iterate over history entries within time range.
+
+        Uses MongoDB's native cursor with batch_size for efficient iteration.
+
+        :param start_time: Start of time range (inclusive)
+        :param end_time: End of time range (inclusive)
+        :param batch_size: Number of history entries per batch
+        :return: Iterator yielding batches of InvocationHistory objects
+        """
+        cursor = (
+            self.cols.state_backend_history.find(
+                {
+                    "history_timestamp": {
+                        "$gte": start_time,
+                        "$lte": end_time,
+                    }
+                }
+            )
+            .sort("history_timestamp", ASCENDING)
+            .batch_size(batch_size)
+        )
+
+        batch: list[InvocationHistory] = []
+        for doc in cursor:
+            batch.append(InvocationHistory.from_json(doc["history_json"]))
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+        if batch:
+            yield batch
 
     def _get_result(self, invocation_id: str) -> Result:
         """Retrieves the result of an invocation by ID."""

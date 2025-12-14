@@ -59,6 +59,8 @@ class StateBackendCollections(MongoCollections):
                     ],
                     unique=True,
                 ),
+                # Add index for time-range queries
+                IndexModel([("history_timestamp", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)
