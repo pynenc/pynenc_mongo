@@ -361,6 +361,58 @@ class MongoOrchestrator(BaseOrchestrator):
         for doc in docs:
             yield doc["invocation_id"]
 
+    def get_invocation_ids_paginated(
+        self,
+        task_id: str | None = None,
+        statuses: list[InvocationStatus] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[str]:
+        """
+        Retrieve invocation IDs with pagination support.
+
+        Results are ordered by registration time (newest first).
+
+        :param task_id: Optional task ID to filter by
+        :param statuses: Optional statuses to filter by
+        :param limit: Maximum number of results to return
+        :param offset: Number of results to skip
+        :return: List of matching invocation IDs
+        """
+        query: dict = {}
+        if task_id:
+            query["task_id"] = task_id
+        if statuses:
+            query["status"] = {"$in": [s.value for s in statuses]}
+
+        docs = (
+            self.cols.orchestrator_invocations.find(query, {"invocation_id": 1})
+            .sort("status_timestamp", -1)
+            .skip(offset)
+            .limit(limit)
+        )
+        return [doc["invocation_id"] for doc in docs]
+
+    def count_invocations(
+        self,
+        task_id: str | None = None,
+        statuses: list[InvocationStatus] | None = None,
+    ) -> int:
+        """
+        Count invocations matching the given filters.
+
+        :param task_id: Optional task ID to filter by
+        :param statuses: Optional statuses to filter by
+        :return: The total count of matching invocations
+        """
+        query: dict = {}
+        if task_id:
+            query["task_id"] = task_id
+        if statuses:
+            query["status"] = {"$in": [s.value for s in statuses]}
+
+        return self.cols.orchestrator_invocations.count_documents(query)
+
     def get_call_invocation_ids(self, call_id: str) -> Iterator[str]:
         """Retrieves all invocation IDs for a given call ID."""
         docs = self.cols.orchestrator_invocations.find({"call_id": call_id})
