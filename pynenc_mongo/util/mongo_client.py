@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -9,12 +10,48 @@ from bson.objectid import ObjectId
 from pymongo import MongoClient as PyMongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
-from pymongo.errors import AutoReconnect, CursorNotFound, DuplicateKeyError
+from pymongo.errors import (
+    AutoReconnect,
+    ConnectionFailure,
+    CursorNotFound,
+    DuplicateKeyError,
+    NetworkTimeout,
+    NotPrimaryError,
+    OperationFailure,
+    ServerSelectionTimeoutError,
+)
 
 from pynenc_mongo.conf.config_mongo import ConfigMongo
 
 if TYPE_CHECKING:
     from pynenc_mongo.util.mongo_collections import CollectionSpec
+
+logger = logging.getLogger(__name__)
+
+# Exceptions that indicate transient connection issues and should be retried
+RETRYABLE_EXCEPTIONS = (
+    AutoReconnect,
+    ConnectionFailure,
+    CursorNotFound,
+    NetworkTimeout,
+    NotPrimaryError,
+    ServerSelectionTimeoutError,
+)
+
+# MongoDB server error codes that indicate transient failures and should be retried.
+# These codes are not exposed as constants by pymongo, so we define them here.
+# Reference: https://github.com/mongodb/mongo/blob/master/src/mongo/base/error_codes.yml
+MONGO_ERROR_INTERRUPTED = 11600  # Operation was interrupted
+MONGO_ERROR_INTERRUPTED_AT_SHUTDOWN = 11602  # Interrupted due to server shutdown
+MONGO_ERROR_NOT_PRIMARY_NO_SECONDARY_OK = 13435  # Not primary and secondaryOk=false
+MONGO_ERROR_NOT_PRIMARY_OR_SECONDARY = 13436  # Node is neither primary nor secondary
+
+RETRYABLE_OPERATION_FAILURE_CODES = (
+    MONGO_ERROR_INTERRUPTED,
+    MONGO_ERROR_INTERRUPTED_AT_SHUTDOWN,
+    MONGO_ERROR_NOT_PRIMARY_NO_SECONDARY_OK,
+    MONGO_ERROR_NOT_PRIMARY_OR_SECONDARY,
+)
 
 
 class UpsertOutcome(StrEnum):
@@ -53,12 +90,17 @@ class RetryableCollection:
         spec: "CollectionSpec",
         max_retries: int = 3,
         base_delay: float = 0.1,
+        max_delay: float = 60.0,
+        max_time: float = 300.0,
+        retry_indefinitely: bool = False,
     ) -> None:
         self._collection = collection
         self._spec = spec
         self._max_retries = max_retries
         self._base_delay = base_delay
-        self._max_delay = 10.0
+        self._max_delay = max_delay
+        self._max_time = max_time
+        self._retry_indefinitely = retry_indefinitely
 
     @property
     def spec(self) -> "CollectionSpec":
@@ -72,19 +114,66 @@ class RetryableCollection:
             return self._wrap_with_retry(attr)
         return attr
 
+    def _should_stop_retrying(self, attempt: int, elapsed: float) -> bool:
+        """Check if retry loop should stop based on attempts and time."""
+        if self._retry_indefinitely:
+            return False
+        return attempt >= self._max_retries or elapsed >= self._max_time
+
+    def _log_retry(
+        self, func_name: str, attempt: int, delay: float, error: Exception
+    ) -> None:
+        """Log a warning message for retry attempts."""
+        logger.warning(
+            f"MongoDB connection error during '{func_name}' "
+            f"(attempt {attempt}): {error}. Retrying in {delay:.1f}s..."
+        )
+
+    def _log_failure(
+        self, func_name: str, attempt: int, elapsed: float, error: Exception
+    ) -> None:
+        """Log an error message when retries are exhausted."""
+        logger.error(
+            f"MongoDB operation '{func_name}' failed after "
+            f"{attempt} attempts over {elapsed:.1f}s: {error}"
+        )
+
     def _wrap_with_retry(self, func: Callable[..., Any]) -> Callable[..., Any]:
+        # Capture method references before creating wrapper to avoid __getattr__ proxy
+        should_stop = self._should_stop_retrying
+        log_failure = self._log_failure
+        log_retry = self._log_retry
+        base_delay = self._base_delay
+        max_delay = self._max_delay
+
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            delay = self._base_delay
-            for attempt in range(self._max_retries):
+            delay = base_delay
+            start_time = time.monotonic()
+            attempt = 0
+
+            while True:
                 try:
                     return func(*args, **kwargs)
-                except (AutoReconnect, CursorNotFound):
-                    if attempt == self._max_retries - 1:
+                except (*RETRYABLE_EXCEPTIONS, OperationFailure) as e:
+                    # Only check error codes for exact OperationFailure (not subclasses like CursorNotFound)
+                    if (
+                        type(e) is OperationFailure
+                        and e.code not in RETRYABLE_OPERATION_FAILURE_CODES
+                    ):
                         raise
-                    time.sleep(min(delay, self._max_delay))
+
+                    attempt += 1
+                    elapsed = time.monotonic() - start_time
+
+                    if should_stop(attempt, elapsed):
+                        log_failure(func.__name__, attempt, elapsed, e)
+                        raise
+
+                    current_delay = min(delay, max_delay)
+                    log_retry(func.__name__, attempt, current_delay, e)
+                    time.sleep(current_delay)
                     delay *= 2
-            return func(*args, **kwargs)
 
         return wrapper
 
@@ -162,6 +251,9 @@ class PynencMongoClient:
             spec=spec,
             max_retries=self.conf.max_retries,
             base_delay=self.conf.retry_base_delay,
+            max_delay=self.conf.retry_max_delay,
+            max_time=self.conf.retry_max_time,
+            retry_indefinitely=self.conf.retry_indefinitely,
         )
 
 

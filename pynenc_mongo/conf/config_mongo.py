@@ -57,6 +57,20 @@ class ConfigMongo(ConfigPynencBase):
         The base delay in seconds between retry attempts for MongoDB operations.
         Defaults to 0.1.
 
+    :cvar ConfigField[float] retry_max_delay:
+        The maximum delay in seconds between retry attempts. Delays are capped at this
+        value to prevent excessively long waits. Defaults to 60.0 (1 minute).
+
+    :cvar ConfigField[float] retry_max_time:
+        The maximum total time in seconds to spend retrying before giving up.
+        Defaults to 300.0 (5 minutes). This ensures the system keeps trying to
+        reconnect for a reasonable period during temporary outages.
+
+    :cvar ConfigField[bool] retry_indefinitely:
+        If True, retry indefinitely until connection is restored, ignoring max_retries
+        and retry_max_time. Use with caution as this may block forever.
+        Defaults to False.
+
     Example usage of the `ConfigMongo` class involves initializing it with specific
     values for host, port, database, or authentication source, or relying on the defaults
     for a standard Mongo setup.
@@ -78,3 +92,6 @@ class ConfigMongo(ConfigPynencBase):
     # Connection management settings
     max_retries = ConfigField(3)
     retry_base_delay = ConfigField(0.1)
+    retry_max_delay = ConfigField(60.0)
+    retry_max_time = ConfigField(300.0)
+    retry_indefinitely = ConfigField(False)
