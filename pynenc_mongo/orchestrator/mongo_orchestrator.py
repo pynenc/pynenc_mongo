@@ -748,6 +748,52 @@ class MongoOrchestrator(BaseOrchestrator):
         for doc in docs:
             yield doc["invocation_id"]
 
+    def get_running_invocations_for_recovery(self) -> Iterator[str]:
+        """
+        Retrieve RUNNING invocation IDs owned by inactive runners.
+
+        An inactive runner is one that hasn't sent a heartbeat within the
+        configured timeout period.
+
+        :return: Iterator of invocation IDs that need recovery
+        """
+        timeout_seconds = self.conf.runner_heartbeat_timeout_minutes * 60
+        current_time = time()
+        cutoff_time = current_time - timeout_seconds
+
+        # Use aggregation to find RUNNING invocations where owner is not active
+        pipeline = [
+            {
+                "$match": {
+                    "status": InvocationStatus.RUNNING.value,
+                    "status_owner_id": {"$ne": None},
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "orchestrator_runner_heartbeats",
+                    "localField": "status_owner_id",
+                    "foreignField": "runner_id",
+                    "as": "runner",
+                }
+            },
+            {
+                "$match": {
+                    "$or": [
+                        # Runner not found in heartbeats
+                        {"runner": {"$size": 0}},
+                        # Runner's last heartbeat is stale
+                        {"runner.last_heartbeat": {"$lt": cutoff_time}},
+                    ]
+                }
+            },
+            {"$project": {"invocation_id": 1}},
+        ]
+
+        docs = self.cols.orchestrator_invocations.aggregate(pipeline)
+        for doc in docs:
+            yield doc["invocation_id"]
+
     def purge(self) -> None:
         """Clear all orchestrator state."""
         self.cols.purge_all()
