@@ -41,7 +41,14 @@ class MongoBuilderPlugin:
 
 
 def mongo(
-    builder: "PynencBuilder", url: str | None = None, db: int | None = None
+    builder: "PynencBuilder",
+    url: str | None = None,
+    db: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    username: str | None = None,
+    password: str | None = None,
+    auth_source: str | None = None,
 ) -> "PynencBuilder":
     """
     Configure Mongo components for the Pynenc application.
@@ -51,23 +58,42 @@ def mongo(
 
     :param PynencBuilder builder: The PynencBuilder instance
     :param str | None url: The Mongo URL to connect to. If specified, overrides all other connection
-        parameters including host, port, and db
-    :param int | None db: The Mongo database number to use. Only valid when url is not provided.
-        If url is provided, the database should be specified in the URL itself
+        parameters including host, port, db, username, password, and auth_source.
+    :param str | None db: The Mongo database name to use. Only valid when url is not provided.
+        If url is provided, the database should be specified in the URL itself.
+    :param str | None host: The Mongo host to connect to. Ignored if url is provided.
+    :param int | None port: The Mongo port to connect to. Ignored if url is provided.
+    :param str | None username: The Mongo username to use. Ignored if url is provided.
+    :param str | None password: The Mongo password to use. Ignored if url is provided.
+    :param str | None auth_source: The Mongo authentication source database. Ignored if url is provided.
     :return: The builder instance for method chaining
-    :raises ValueError: If both url and db are provided, since url takes precedence
+    :raises ValueError: If both url and any other connection parameter are provided, since url takes precedence
     """
-    if url and db is not None:
-        raise ValueError(
-            "Cannot specify both 'url' and 'db' parameters. "
-            "When using 'url', specify the database in the URL (e.g., 'mongo://host:port/db'). "
-            "The 'url' parameter overrides all other connection settings."
-        )
-
+    # If url is provided, it takes precedence over all other connection parameters
     if url:
+        # Warn if any other connection parameter is also provided
+        if any(
+            x is not None for x in (db, host, port, username, password, auth_source)
+        ):
+            raise ValueError(
+                "Cannot specify both 'url' and other connection parameters. "
+                "When using 'url', specify all connection info in the URL. "
+                "The 'url' parameter overrides all other connection settings."
+            )
         builder._config["mongo_url"] = url
-    elif db is not None:
-        builder._config["mongo_db"] = db
+    else:
+        if db is not None:
+            builder._config["mongo_db"] = db
+        if host is not None:
+            builder._config["mongo_host"] = host
+        if port is not None:
+            builder._config["mongo_port"] = port
+        if username is not None:
+            builder._config["mongo_username"] = username
+        if password is not None:
+            builder._config["mongo_password"] = password
+        if auth_source is not None:
+            builder._config["mongo_auth_source"] = auth_source
 
     builder._config.update(
         {
