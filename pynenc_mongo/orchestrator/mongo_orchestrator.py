@@ -32,7 +32,6 @@ from pynenc_mongo.orchestrator.mongo_orchestrator_collections import (
 if TYPE_CHECKING:
     from pynenc.app import Pynenc
     from pynenc.invocation.dist_invocation import DistributedInvocation
-    from pynenc.runner.runner_context import RunnerContext
     from pynenc.task import Task
     from pynenc.types import Params, Result
 
@@ -645,44 +644,42 @@ class MongoOrchestrator(BaseOrchestrator):
         )
         return [doc["invocation_id"] for doc in docs]
 
-    def register_runner_heartbeat(
+    def register_runner_heartbeats(
         self,
-        runner_ctx: "RunnerContext",
+        runner_ids: list[str],
         can_run_atomic_service: bool = False,
     ) -> None:
         """
-        Register or update a runner's heartbeat timestamp.
+        Register or update runners' heartbeat timestamp.
 
-        :param RunnerContext runner_ctx: The runner context to register.
-        :param bool can_run_atomic_service: Whether this runner is eligible to run atomic services.
+        :param list[str] runner_ids: The list of runner IDs to register.
+        :param bool can_run_atomic_service: Whether these runners are eligible to run atomic services.
         """
         current_time = time()
-        runner_id = runner_ctx.runner_id
-        runner_json = runner_ctx.to_json()
-
-        self.cols.orchestrator_runner_heartbeats.update_one(
-            {"runner_id": runner_id},
-            {
-                "$set": {
-                    "runner_context_json": runner_json,
-                    "last_heartbeat": current_time,
-                    "allow_to_run_atomic_service": can_run_atomic_service,
+        for runner_id in runner_ids:
+            self.cols.orchestrator_runner_heartbeats.update_one(
+                {"runner_id": runner_id},
+                {
+                    "$set": {
+                        "runner_id": runner_id,
+                        "last_heartbeat": current_time,
+                        "allow_to_run_atomic_service": can_run_atomic_service,
+                    },
+                    "$setOnInsert": {
+                        "creation_timestamp": current_time,
+                        "last_service_start": None,
+                        "last_service_end": None,
+                    },
                 },
-                "$setOnInsert": {
-                    "creation_timestamp": current_time,
-                    "last_service_start": None,
-                    "last_service_end": None,
-                },
-            },
-            upsert=True,
-        )
+                upsert=True,
+            )
 
     def record_atomic_service_execution(
-        self, runner_ctx: "RunnerContext", start_time: datetime, end_time: datetime
+        self, runner_id: str, start_time: datetime, end_time: datetime
     ) -> None:
         """Record the latest atomic service execution window for a runner."""
         self.cols.orchestrator_runner_heartbeats.update_one(
-            {"runner_id": runner_ctx.runner_id},
+            {"runner_id": runner_id},
             {"$set": {"last_service_start": start_time, "last_service_end": end_time}},
         )
 
@@ -701,10 +698,7 @@ class MongoOrchestrator(BaseOrchestrator):
         :return: List of active runners ordered by creation time (oldest first)
         :rtype: list["ActiveRunnerInfo"]
         """
-        from pynenc.runner.runner_context import RunnerContext
-
-        current_time = time()
-        cutoff_time = current_time - timeout_seconds
+        cutoff_time = time() - timeout_seconds
 
         query: dict = {"last_heartbeat": {"$gte": cutoff_time}}
         if can_run_atomic_service is not None:
@@ -716,8 +710,6 @@ class MongoOrchestrator(BaseOrchestrator):
 
         active_runners = []
         for doc in docs:
-            runner_ctx = RunnerContext.from_json(doc["runner_context_json"])
-
             # MongoDB stores datetimes as naive UTC - make them aware
             last_service_start = doc.get("last_service_start")
             if last_service_start is not None and last_service_start.tzinfo is None:
@@ -729,7 +721,7 @@ class MongoOrchestrator(BaseOrchestrator):
 
             active_runners.append(
                 ActiveRunnerInfo(
-                    runner_ctx=runner_ctx,
+                    runner_id=doc["runner_id"],
                     creation_time=datetime.fromtimestamp(
                         doc["creation_timestamp"], tz=UTC
                     ),
@@ -753,8 +745,7 @@ class MongoOrchestrator(BaseOrchestrator):
 
         :param float timeout_seconds: Heartbeat timeout in seconds (typically from atomic_service_runner_considered_dead_after_minutes config)
         """
-        current_time = time()
-        cutoff_time = current_time - timeout_seconds
+        cutoff_time = time() - timeout_seconds
 
         self.cols.orchestrator_runner_heartbeats.delete_many(
             {"last_heartbeat": {"$lt": cutoff_time}}
@@ -795,8 +786,7 @@ class MongoOrchestrator(BaseOrchestrator):
         :return: Iterator of invocation IDs that need recovery.
         :rtype: Iterator[str]
         """
-        current_time = time()
-        cutoff_time = current_time - timeout_seconds
+        cutoff_time = time() - timeout_seconds
 
         # Use aggregation to find RUNNING invocations where owner is not active
         pipeline = [
