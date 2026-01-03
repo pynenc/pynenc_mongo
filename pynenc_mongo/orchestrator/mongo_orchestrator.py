@@ -686,22 +686,23 @@ class MongoOrchestrator(BaseOrchestrator):
             {"$set": {"last_service_start": start_time, "last_service_end": end_time}},
         )
 
-    def get_active_runners(
-        self, can_run_atomic_service: bool | None = None
+    def _get_active_runners(
+        self, timeout_seconds: float, can_run_atomic_service: bool | None
     ) -> list["ActiveRunnerInfo"]:
         """
-        Retrieve all active runners with heartbeat information.
+        Retrieve runners that are considered active based on heartbeat activity.
 
-        Only returns runners that have sent a heartbeat within the configured timeout period.
-        Results are ordered by creation time (oldest first).
+        A runner is considered "active" if it has sent a heartbeat within the timeout period.
+        This is used for atomic service scheduling to determine which runners are eligible
+        to participate in time slot distribution.
 
-        :param bool | None can_run_atomic_service: If specified, filters runners based on their eligibility to run atomic services.
-        :return: List of active runner information ordered by creation time (oldest first)
+        :param float timeout_seconds: Heartbeat timeout in seconds (typically from atomic_service_runner_considered_dead_after_minutes config)
+        :param bool | None can_run_atomic_service: If specified, filters runners based on their eligibility to run atomic services
+        :return: List of active runners ordered by creation time (oldest first)
         :rtype: list["ActiveRunnerInfo"]
         """
         from pynenc.runner.runner_context import RunnerContext
 
-        timeout_seconds = self.conf.runner_heartbeat_timeout_minutes * 60
         current_time = time()
         cutoff_time = current_time - timeout_seconds
 
@@ -743,9 +744,15 @@ class MongoOrchestrator(BaseOrchestrator):
 
         return active_runners
 
-    def cleanup_inactive_runners(self) -> None:
-        """Remove runners that haven't sent a heartbeat within the timeout period."""
-        timeout_seconds = self.conf.runner_heartbeat_timeout_minutes * 60
+    def _cleanup_inactive_runners(self, timeout_seconds: float) -> None:
+        """
+        Remove runners that haven't sent a heartbeat within the timeout period.
+
+        This is part of invocation recovery: runners inactive for longer than timeout_seconds
+        are considered dead, and their RUNNING invocations will be recovered.
+
+        :param float timeout_seconds: Heartbeat timeout in seconds (typically from atomic_service_runner_considered_dead_after_minutes config)
+        """
         current_time = time()
         cutoff_time = current_time - timeout_seconds
 
@@ -774,16 +781,20 @@ class MongoOrchestrator(BaseOrchestrator):
         for doc in docs:
             yield doc["invocation_id"]
 
-    def get_running_invocations_for_recovery(self) -> Iterator[str]:
+    def _get_running_invocations_for_recovery(
+        self, timeout_seconds: float
+    ) -> Iterator[str]:
         """
-        Retrieve RUNNING invocation IDs owned by inactive runners.
+        Retrieve invocation IDs in RUNNING status owned by inactive runners.
 
         An inactive runner is one that hasn't sent a heartbeat within the
-        configured timeout period.
+        configured timeout period. Invocations owned by such runners are
+        considered stuck and need recovery.
 
-        :return: Iterator of invocation IDs that need recovery
+        :param float timeout_seconds: Heartbeat timeout in seconds
+        :return: Iterator of invocation IDs that need recovery.
+        :rtype: Iterator[str]
         """
-        timeout_seconds = self.conf.runner_heartbeat_timeout_minutes * 60
         current_time = time()
         cutoff_time = current_time - timeout_seconds
 
