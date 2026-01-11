@@ -295,10 +295,10 @@ class MongoOrchestrator(BaseOrchestrator):
     def _register_new_invocations(
         self,
         invocations: list["DistributedInvocation[Params, Result]"],
-        owner_id: str | None = None,
+        runner_id: str | None = None,
     ) -> InvocationStatusRecord:
         """Register new invocations with status Registered if they don't exist yet."""
-        status_record = InvocationStatusRecord(InvocationStatus.REGISTERED, owner_id)
+        status_record = InvocationStatusRecord(InvocationStatus.REGISTERED, runner_id)
         for invocation in invocations:
             self.cols.orchestrator_invocations.insert_or_ignore(
                 {
@@ -306,7 +306,7 @@ class MongoOrchestrator(BaseOrchestrator):
                     "task_id": invocation.task.task_id,
                     "call_id": invocation.call_id,
                     "status": status_record.status.value,
-                    "status_owner_id": status_record.owner_id,
+                    "status_runner_id": status_record.runner_id,
                     "status_timestamp": status_record.timestamp,
                     "retry_count": 0,
                     "auto_purge_timestamp": None,
@@ -438,23 +438,23 @@ class MongoOrchestrator(BaseOrchestrator):
         )
 
     def _validate_ownership_acquisition(
-        self, invocation_id: str, owner_id: str
+        self, invocation_id: str, runner_id: str
     ) -> bool:
         """
         Validate ownership acquisition using time-based consensus.
 
         This implements a pseudo-atomic ownership protocol:
-        1. Add owner_id to ownership_claims array
+        1. Add runner_id to ownership_claims array
         2. Wait for consensus period
-        3. Check if our owner_id is first in the array
+        3. Check if our runner_id is first in the array
 
         :param invocation_id: ID of the invocation to claim
-        :param owner_id: ID of the worker attempting to claim ownership
+        :param runner_id: ID of the worker attempting to claim ownership
         :return: True if ownership successfully acquired, False otherwise
         """
-        # Step 1: Push our owner_id to the claims array
+        # Step 1: Push our runner_id to the claims array
         self.cols.orchestrator_invocations.update_one(
-            {"invocation_id": invocation_id}, {"$push": {"ownership_claims": owner_id}}
+            {"invocation_id": invocation_id}, {"$push": {"ownership_claims": runner_id}}
         )
 
         # Step 2: Wait for consensus period
@@ -471,7 +471,7 @@ class MongoOrchestrator(BaseOrchestrator):
         ownership_claims = doc.get("ownership_claims", [])
 
         # We win if we're first in the list
-        return ownership_claims and ownership_claims[0] == owner_id
+        return ownership_claims and ownership_claims[0] == runner_id
 
     def _release_ownership(self, invocation_id: str) -> None:
         """
@@ -484,7 +484,7 @@ class MongoOrchestrator(BaseOrchestrator):
         )
 
     def _atomic_status_transition(
-        self, invocation_id: str, status: InvocationStatus, owner_id: str | None = None
+        self, invocation_id: str, status: InvocationStatus, runner_id: str | None = None
     ) -> InvocationStatusRecord:
         """Set the status of an invocation by ID."""
         doc = self.cols.orchestrator_invocations.find_one(
@@ -494,21 +494,21 @@ class MongoOrchestrator(BaseOrchestrator):
             raise KeyError(f"Invocation ID {invocation_id} not found")
         prev_status_record = InvocationStatusRecord(
             InvocationStatus(doc["status"]),
-            doc["status_owner_id"],
+            doc["status_runner_id"],
             doc["status_timestamp"],
         )
 
         # Validate the transition
-        new_record = status_record_transition(prev_status_record, status, owner_id)
+        new_record = status_record_transition(prev_status_record, status, runner_id)
 
         # Check ownership acquisition if needed: pseudo-atomic protocol
         new_def = get_status_definition(status)
         if new_def.acquires_ownership:
-            if not owner_id:
+            if not runner_id:
                 raise InvocationStatusError(
                     f"Owner ID must be provided when transitioning to status {status}"
                 )
-            if not self._validate_ownership_acquisition(invocation_id, owner_id):
+            if not self._validate_ownership_acquisition(invocation_id, runner_id):
                 raise InvocationStatusRaceConditionError(
                     invocation_id=invocation_id,
                     previous_status_record=prev_status_record,
@@ -520,7 +520,7 @@ class MongoOrchestrator(BaseOrchestrator):
 
         update_doc: dict = {
             "status": new_record.status.value,
-            "status_owner_id": new_record.owner_id,
+            "status_runner_id": new_record.runner_id,
             "status_timestamp": new_record.timestamp,
         }
 
@@ -531,7 +531,7 @@ class MongoOrchestrator(BaseOrchestrator):
         ):
             prev_status_record_on_update = InvocationStatusRecord(
                 InvocationStatus(prev_doc_on_update["status"]),
-                prev_doc_on_update["status_owner_id"],
+                prev_doc_on_update["status_runner_id"],
                 prev_doc_on_update["status_timestamp"],
             )
             if prev_status_record != prev_status_record_on_update:
@@ -542,7 +542,7 @@ class MongoOrchestrator(BaseOrchestrator):
                 )
                 try:
                     _ = status_record_transition(
-                        prev_status_record_on_update, status, owner_id
+                        prev_status_record_on_update, status, runner_id
                     )
                     self.app.logger.warning(
                         error_msg
@@ -613,7 +613,7 @@ class MongoOrchestrator(BaseOrchestrator):
             raise KeyError(f"Invocation ID {invocation_id} not found")
         return InvocationStatusRecord(
             InvocationStatus(doc["status"]),
-            doc["status_owner_id"],
+            doc["status_runner_id"],
             doc["status_timestamp"],
         )
 
@@ -657,6 +657,7 @@ class MongoOrchestrator(BaseOrchestrator):
         """
         current_time = time()
         for runner_id in runner_ids:
+            self.app.logger.debug(f"Registering heartbeat for runner: {runner_id}")
             self.cols.orchestrator_runner_heartbeats.update_one(
                 {"runner_id": runner_id},
                 {
@@ -736,21 +737,6 @@ class MongoOrchestrator(BaseOrchestrator):
 
         return active_runners
 
-    def _cleanup_inactive_runners(self, timeout_seconds: float) -> None:
-        """
-        Remove runners that haven't sent a heartbeat within the timeout period.
-
-        This is part of invocation recovery: runners inactive for longer than timeout_seconds
-        are considered dead, and their RUNNING invocations will be recovered.
-
-        :param float timeout_seconds: Heartbeat timeout in seconds (typically from atomic_service_runner_considered_dead_after_minutes config)
-        """
-        cutoff_time = time() - timeout_seconds
-
-        self.cols.orchestrator_runner_heartbeats.delete_many(
-            {"last_heartbeat": {"$lt": cutoff_time}}
-        )
-
     def get_pending_invocations_for_recovery(self) -> Iterator[str]:
         """
         Retrieve invocation IDs stuck in PENDING status beyond the allowed time.
@@ -788,38 +774,50 @@ class MongoOrchestrator(BaseOrchestrator):
         """
         cutoff_time = time() - timeout_seconds
 
-        # Use aggregation to find RUNNING invocations where owner is not active
-        pipeline = [
-            {
-                "$match": {
-                    "status": InvocationStatus.RUNNING.value,
-                    "status_owner_id": {"$ne": None},
-                }
-            },
-            {
-                "$lookup": {
-                    "from": "orchestrator_runner_heartbeats",
-                    "localField": "status_owner_id",
-                    "foreignField": "runner_id",
-                    "as": "runner",
-                }
-            },
-            {
-                "$match": {
-                    "$or": [
-                        # Runner not found in heartbeats
-                        {"runner": {"$size": 0}},
-                        # Runner's last heartbeat is stale
-                        {"runner.last_heartbeat": {"$lt": cutoff_time}},
-                    ]
-                }
-            },
-            {"$project": {"invocation_id": 1}},
-        ]
+        # Step 1: Find inactive runners (with stale heartbeats)
+        inactive_runners_with_stale_heartbeat = list(
+            self.cols.orchestrator_runner_heartbeats.find(
+                {"last_heartbeat": {"$lt": cutoff_time}}, {"runner_id": 1}
+            )
+        )
 
-        docs = self.cols.orchestrator_invocations.aggregate(pipeline)
-        for doc in docs:
-            yield doc["invocation_id"]
+        inactive_runner_ids = {
+            runner["runner_id"] for runner in inactive_runners_with_stale_heartbeat
+        }
+
+        # Step 2: Get active runner IDs (with fresh heartbeats)
+        active_runners = list(
+            self.cols.orchestrator_runner_heartbeats.find(
+                {"last_heartbeat": {"$gte": cutoff_time}}, {"runner_id": 1}
+            )
+        )
+        active_runner_ids = {runner["runner_id"] for runner in active_runners}
+
+        if inactive_runner_ids:
+            self.app.logger.info(
+                f"Inactive runners (stale heartbeat): {inactive_runner_ids}"
+            )
+
+        # Step 3: Find all RUNNING invocations
+        running_invocations = self.cols.orchestrator_invocations.find(
+            {
+                "status": InvocationStatus.RUNNING.value,
+                "status_runner_id": {"$ne": None},
+            },
+            {"invocation_id": 1, "status_runner_id": 1},
+        )
+
+        # Step 4: Yield invocations owned by inactive runners (no heartbeat or stale heartbeat)
+        for invocation in running_invocations:
+            runner_id = invocation["status_runner_id"]
+            # Recovery if owner has no heartbeat OR has stale heartbeat
+            if runner_id not in active_runner_ids:
+                if runner_id not in inactive_runner_ids:
+                    self.app.logger.info(f"Runner {runner_id} has no heartbeat record")
+                self.app.logger.info(
+                    f"Invocation to recover: {invocation['invocation_id']}"
+                )
+                yield invocation["invocation_id"]
 
     def purge(self) -> None:
         """Clear all orchestrator state."""

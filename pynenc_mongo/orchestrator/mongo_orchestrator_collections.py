@@ -26,6 +26,7 @@ class OrchestratorCollections(MongoCollections):
                 IndexModel([("call_id", ASCENDING)]),
                 IndexModel([("status", ASCENDING)]),
                 IndexModel([("auto_purge_timestamp", ASCENDING)]),
+                IndexModel([("status_runner_id", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)

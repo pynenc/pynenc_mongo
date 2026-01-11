@@ -7,6 +7,7 @@ from pymongo import ASCENDING
 from pymongo.errors import DuplicateKeyError
 from pynenc.app_info import AppInfo
 from pynenc.invocation.dist_invocation import DistributedInvocation
+from pynenc.runner.runner_context import RunnerContext
 from pynenc.state_backend.base_state_backend import BaseStateBackend, InvocationHistory
 from pynenc.types import Params, Result
 from pynenc.workflow import WorkflowIdentity
@@ -300,6 +301,46 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         )
         for doc in docs:
             yield doc["sub_invocation_id"]
+
+    def _store_runner_context(self, runner_context: "RunnerContext") -> None:
+        """
+        Store a runner context in MongoDB.
+
+        :param RunnerContext runner_context: The context to store
+        """
+        self.cols.state_backend_runner_contexts.insert_or_ignore(
+            {
+                "runner_id": runner_context.runner_id,
+                "context_json": runner_context.to_json(),
+            }
+        )
+
+    def _get_runner_context(self, runner_id: str) -> "RunnerContext | None":
+        """
+        Retrieve a runner context by runner_id from MongoDB.
+
+        :param str runner_id: The runner's unique identifier
+        :return: The stored RunnerContext or None if not found
+        """
+        doc = self.cols.state_backend_runner_contexts.find_one({"runner_id": runner_id})
+        if doc:
+            return RunnerContext.from_json(doc["context_json"])
+        return None
+
+    def _get_runner_contexts(self, runner_ids: list[str]) -> list["RunnerContext"]:
+        """
+        Retrieve multiple runner contexts by their IDs.
+
+        :param list[str] runner_ids: List of runner unique identifiers
+        :return: list["RunnerContext"] of the stored RunnerContexts
+        """
+        contexts: list[RunnerContext] = []
+        docs = self.cols.state_backend_runner_contexts.find(
+            {"runner_id": {"$in": runner_ids}}
+        )
+        for doc in docs:
+            contexts.append(RunnerContext.from_json(doc["context_json"]))
+        return contexts
 
     def purge(self) -> None:
         """Clear all state backend data."""

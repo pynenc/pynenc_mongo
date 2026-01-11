@@ -113,3 +113,13 @@ class StateBackendCollections(MongoCollections):
             ],
         )
         return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def state_backend_runner_contexts(self) -> "RetryableCollection":
+        spec = CollectionSpec(
+            name="state_backend_runner_contexts",
+            indexes=[
+                IndexModel([("runner_id", ASCENDING)], unique=True),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)

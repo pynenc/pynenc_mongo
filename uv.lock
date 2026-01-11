@@ -947,7 +947,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/97/79/9382c00183979e6ce
 
 [[package]]
 name = "pynenc"
-version = "0.1.0rc101.dev143"
+version = "0.1.0rc101.dev144"
 source = { registry = "https://test.pypi.org/simple/" }
 dependencies = [
     { name = "cistell" },
@@ -956,9 +956,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://test-files.pythonhosted.org/packages/f5/23/110778545a1bbb55876b0e19ac87132266ac52de4ef6f3263b14f690e4bf/pynenc-0.1.0rc101.dev143.tar.gz", hash = "sha256:a5b1e67d5ccb949d2985bc93543ed621cfa0b58740de8cdf64ca373959d6f90a", size = 1723747, upload-time = "2026-01-03T16:54:59.908Z" }
+sdist = { url = "https://test-files.pythonhosted.org/packages/ea/0a/b65f1f28bac1f42def1ff3fceb37a870679794165f7d27e48b938d6fc513/pynenc-0.1.0rc101.dev144.tar.gz", hash = "sha256:fd710b5d9d34cfdf7bba4ba89cf3621ad00fe9d60ff8878c8e589984c0c5b3cd", size = 1733924, upload-time = "2026-01-11T12:03:34.344Z" }
 wheels = [
-    { url = "https://test-files.pythonhosted.org/packages/d5/d7/513417211fa0b880b69997a8053560725753fc85d7a203b39c67dc890ee3/pynenc-0.1.0rc101.dev143-py3-none-any.whl", hash = "sha256:d5155946e39b78268aef4f56ceac67248200a9c9a3c234857a6cbe65c128b46d", size = 588876, upload-time = "2026-01-03T16:55:01.597Z" },
+    { url = "https://test-files.pythonhosted.org/packages/0d/0b/aa771c656cafd121ffb4dd8b7a5b1296836beb2afa6930db319642552795/pynenc-0.1.0rc101.dev144-py3-none-any.whl", hash = "sha256:640c9a48337b0c8a02c179c1726c0857f30b05e228c5263c494aee548c226273", size = 602168, upload-time = "2026-01-11T12:03:32.332Z" },
 ]
 
 [package.optional-dependencies]
@@ -1025,7 +1025,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "pymongo", specifier = ">=3.12.2,<3.13" },
-    { name = "pynenc", specifier = ">=0.1.0rc101.dev143", index = "https://test.pypi.org/simple/" },
+    { name = "pynenc", specifier = ">=0.1.0rc101.dev144", index = "https://test.pypi.org/simple/" },
 ]
 
 [package.metadata.requires-dev]
