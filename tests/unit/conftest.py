@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import mongomock
@@ -13,16 +13,42 @@ if TYPE_CHECKING:
     from pynenc.app import Pynenc
 
 
+class MockGridFS:
+    """Mock GridFS for unit tests that don't need actual GridFS functionality."""
+
+    def __init__(
+        self, database: Any, collection: str = "fs", disable_md5: bool = False
+    ) -> None:
+        self.database = database
+        self.collection = collection
+        self._files: dict = {}
+
+    def find_one(self, filter: dict[str, Any]) -> None:
+        return None
+
+    def put(self, data: bytes, **kwargs: Any) -> None:
+        return None
+
+    def delete(self, file_id: Any) -> None:
+        pass
+
+    def find(self) -> list:
+        return []
+
+
 @pytest.fixture
 def patch_mongo_client() -> "Generator[None, None, None]":
     """
-    Patch PyMongoClient in pynenc_mongo.util.mongo_client to use mongomock.MongoClient.
+    Patch PyMongoClient and GridFS to use mongomock for unit tests.
 
     Use this fixture to ensure all MongoDB operations are mocked for unit tests.
     """
     # Reset the singleton so patching works for each test
     PynencMongoClient._instances.clear()
-    with patch("pynenc_mongo.util.mongo_client.PyMongoClient", mongomock.MongoClient):
+    with (
+        patch("pynenc_mongo.util.mongo_client.PyMongoClient", mongomock.MongoClient),
+        patch("pynenc_mongo.util.mongo_client.GridFS", MockGridFS),
+    ):
         yield
     PynencMongoClient._instances.clear()
 

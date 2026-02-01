@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable
 from enum import StrEnum, auto
 from functools import wraps
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from bson.objectid import ObjectId
 from gridfs import GridFS
@@ -235,7 +235,7 @@ class PynencMongoClient:
 
     def get_collection(self, spec: "CollectionSpec") -> RetryableCollection:
         """Returns a retryable collection proxy with stored spec."""
-        db = cast(Database, self._client[self.conf.mongo_db])
+        db: Database = self._client[self.conf.mongo_db]
         collection_key = f"{self.conf.mongo_db}.{spec.name}"
 
         # Ensure indexes exist (only once per collection)
@@ -312,12 +312,15 @@ class GridFSStorage:
         self.conf = conf
         self._collection_prefix = collection_prefix
         self._client = PynencMongoClient.get_instance(conf)
+        self._gridfs: GridFS | None = None
 
     @property
-    def _gridfs(self) -> GridFS:
-        """Get the GridFS instance for this storage."""
-        db = cast(Database, self._client._client[self.conf.mongo_db])
-        return GridFS(db, collection=self._collection_prefix)
+    def gridfs(self) -> GridFS:
+        """Get or create the GridFS instance."""
+        if self._gridfs is None:
+            db: Database = self._client._client[self.conf.mongo_db]
+            self._gridfs = GridFS(db, collection=self._collection_prefix)
+        return self._gridfs
 
     def should_use_gridfs(self, data: str | bytes) -> bool:
         """Check if data exceeds the threshold for GridFS storage."""
@@ -334,10 +337,10 @@ class GridFSStorage:
         """
         data_bytes = data.encode("utf-8") if isinstance(data, str) else data
         # Delete existing file with this key if present
-        existing = self._gridfs.find_one({"filename": key})
+        existing = self.gridfs.find_one({"filename": key})
         if existing:
-            self._gridfs.delete(existing._id)
-        self._gridfs.put(data_bytes, filename=key)
+            self.gridfs.delete(existing._id)
+        self.gridfs.put(data_bytes, filename=key)
         logger.debug(f"Stored {len(data_bytes)} bytes in GridFS with key: {key}")
         return f"{self.GRIDFS_PREFIX}{key}"
 
@@ -354,7 +357,7 @@ class GridFSStorage:
             if key.startswith(self.GRIDFS_PREFIX)
             else key
         )
-        grid_out = self._gridfs.find_one({"filename": actual_key})
+        grid_out = self.gridfs.find_one({"filename": actual_key})
         if grid_out is None:
             raise KeyError(f"GridFS key {actual_key} not found")
         return grid_out.read().decode("utf-8")
@@ -366,14 +369,14 @@ class GridFSStorage:
             if key.startswith(self.GRIDFS_PREFIX)
             else key
         )
-        existing = self._gridfs.find_one({"filename": actual_key})
+        existing = self.gridfs.find_one({"filename": actual_key})
         if existing:
-            self._gridfs.delete(existing._id)
+            self.gridfs.delete(existing._id)
 
     def purge(self) -> None:
         """Delete all files in this GridFS collection."""
-        for grid_file in self._gridfs.find():
-            self._gridfs.delete(grid_file._id)
+        for grid_file in self.gridfs.find():
+            self.gridfs.delete(grid_file._id)
 
     @classmethod
     def is_gridfs_key(cls, key: str) -> bool:
