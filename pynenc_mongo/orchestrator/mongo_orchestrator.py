@@ -5,7 +5,6 @@ from time import sleep, time
 from typing import TYPE_CHECKING
 
 from pymongo import ReturnDocument
-from pynenc.call import Call
 from pynenc.exceptions import (
     CycleDetectedError,
     InvocationStatusError,
@@ -49,18 +48,13 @@ class MongoCycleControl(BaseCycleControl):
         """Add a call dependency and check for cycles using graph traversal."""
         # Check for direct self-cycle first
         if caller.call_id == callee.call_id:
-            raise CycleDetectedError.from_cycle([caller.call])
-        if cycle := self.find_cycle_caused_by_new_invocation(caller, callee):
+            raise CycleDetectedError.from_cycle([caller.call_id])
+        if cycle := self._find_cycle_caused_by_new_edge(caller.call_id, callee.call_id):
             raise CycleDetectedError.from_cycle(cycle)
 
-        # Add calls to tracking
-
-        self.cols.orchestrator_cycle_calls.insert_or_ignore(
-            {"call_id": caller.call_id, "call_json": caller.call.to_json()}
-        )
-        self.cols.orchestrator_cycle_calls.insert_or_ignore(
-            {"call_id": callee.call_id, "call_json": callee.call.to_json()}
-        )
+        # Add calls to tracking (only store call_id, no heavy JSON)
+        self.cols.orchestrator_cycle_calls.insert_or_ignore({"call_id": caller.call_id})
+        self.cols.orchestrator_cycle_calls.insert_or_ignore({"call_id": callee.call_id})
         self.cols.orchestrator_cycle_edges.insert_or_ignore(
             {"caller_id": caller.call_id, "callee_id": callee.call_id}
         )
@@ -114,69 +108,34 @@ class MongoCycleControl(BaseCycleControl):
         path.remove(current_id)
         return None
 
-    def find_cycle_caused_by_new_invocation(
-        self, caller: "DistributedInvocation", callee: "DistributedInvocation"
-    ) -> list["Call"]:
+    def _find_cycle_caused_by_new_edge(
+        self, caller_id: str, callee_id: str
+    ) -> list[str]:
         """
-        Checks if adding a new call from `caller` to `callee` would create a cycle.
-        :param DistributedInvocation caller: The invocation making the call.
-        :param DistributedInvocation callee: The invocation being called.
-        :return: List of `Call` objects forming the cycle, if a cycle is detected; otherwise, an empty list.
-        """
-        # Temporarily add the edge to check if it would cause a cycle
-        self.cols.orchestrator_cycle_edges.insert_or_ignore(
-            {"caller_id": caller.call_id, "callee_id": callee.call_id}
-        )
+        Check if adding a new edge from caller to callee would create a cycle.
 
-        # Set for tracking visited nodes
+        Uses DFS to detect cycles by temporarily considering the new edge.
+
+        :param caller_id: The call_id of the caller invocation.
+        :param callee_id: The call_id of the callee invocation.
+        :return: List of call_ids forming the cycle, or empty list if no cycle.
+        """
         visited: set[str] = set()
-
-        # List for tracking the nodes on the path from caller to callee
         path: list[str] = []
 
-        cycle = self._is_cyclic_util(caller.call_id, visited, path)
+        def get_edges(call_id: str) -> list[str]:
+            edges = [
+                doc["callee_id"]
+                for doc in self.cols.orchestrator_cycle_edges.find(
+                    {"caller_id": call_id}
+                )
+            ]
+            # Include the temporary edge we're checking
+            if call_id == caller_id and callee_id not in edges:
+                edges.append(callee_id)
+            return edges
 
-        # Remove the temporarily added edge
-        self.cols.orchestrator_cycle_edges.delete_one(
-            {"caller_id": caller.call_id, "callee_id": callee.call_id}
-        )
-
-        return cycle
-
-    def _is_cyclic_util(
-        self,
-        current_call_id: str,
-        visited: set[str],
-        path: list[str],
-    ) -> list["Call"]:
-        """
-        A utility function for cycle detection.
-        :param str current_call_id: The current call ID being examined.
-        :param set[str] visited: A set of visited call IDs for cycle detection.
-        :param list[str] path: A list representing the current path of call IDs.
-        :return: List of `Call` objects forming a cycle, if a cycle is detected; otherwise, an empty list.
-        """
-        visited.add(current_call_id)
-        path.append(current_call_id)
-
-        call_cycle = []
-        for edge in self.cols.orchestrator_cycle_edges.find(
-            {"caller_id": current_call_id}
-        ):
-            neighbour_call_id = edge["callee_id"]
-            if neighbour_call_id not in visited:
-                cycle = self._is_cyclic_util(neighbour_call_id, visited, path)
-                if cycle:
-                    return cycle
-            elif neighbour_call_id in path:
-                cycle_start_index = path.index(neighbour_call_id)
-                for _id in path[cycle_start_index:]:
-                    if doc := self.cols.orchestrator_cycle_calls.find_one(
-                        {"call_id": _id}
-                    ):
-                        call_cycle.append(Call.from_json(self.app, doc["call_json"]))
-        path.pop()
-        return call_cycle
+        return self._find_cycle_dfs(caller_id, visited, path, get_edges) or []
 
     def clean_up_invocation_cycles(self, invocation_id: str) -> None:
         """Clean up cycle tracking data for a completed invocation."""

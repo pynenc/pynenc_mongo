@@ -22,6 +22,12 @@ def mongo_conf() -> ConfigMongo:
     return ConfigMongo({"mongo_url": "mongodb://localhost:27017/test"})
 
 
+@pytest.fixture(autouse=True)
+def clear_singleton_cache() -> None:
+    """Clear singleton cache before each test to ensure isolation."""
+    PynencMongoClient._instances.clear()
+
+
 @pytest.fixture
 def collection_spec() -> CollectionSpec:
     """Fixture for a sample CollectionSpec."""
@@ -36,7 +42,7 @@ def test_singleton_instance(mongo_conf: ConfigMongo) -> None:
     client1 = PynencMongoClient.get_instance(mongo_conf)
     client2 = PynencMongoClient.get_instance(mongo_conf)
     assert client1 is client2, "Singleton instance should be the same"
-    assert client1.conf == mongo_conf, "Config should match"
+    assert client1.conf is mongo_conf, "Config should be the same instance"
 
 
 def test_different_config_instances(mongo_conf: ConfigMongo) -> None:
