@@ -71,6 +71,11 @@ class ConfigMongo(ConfigPynencBase):
         and retry_max_time. Use with caution as this may block forever.
         Defaults to False.
 
+    :cvar ConfigField[int] gridfs_threshold:
+        The size threshold in bytes above which documents are stored in GridFS instead
+        of regular collections. This allows storing documents larger than MongoDB's 16MB
+        BSON limit. Defaults to 15MB (15728640 bytes) to provide some safety margin.
+
     Example usage of the `ConfigMongo` class involves initializing it with specific
     values for host, port, database, or authentication source, or relying on the defaults
     for a standard Mongo setup.
@@ -95,3 +100,7 @@ class ConfigMongo(ConfigPynencBase):
     retry_max_delay = ConfigField(60.0)
     retry_max_time = ConfigField(300.0)
     retry_indefinitely = ConfigField(False)
+
+    # GridFS threshold - documents larger than this will be stored in GridFS
+    # Default 15MB to stay safely under MongoDB's 16MB BSON limit
+    gridfs_threshold = ConfigField(15 * 1024 * 1024)

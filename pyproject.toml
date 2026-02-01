@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "pynenc>=0.1.0rc101.dev144",
+    "pynenc>=0.1.0rc101.dev146",
     "pymongo>=3.12.2,<3.13",
 ]
 
@@ -120,7 +120,7 @@ filterwarnings = [
     "ignore:Running in a secondary thread. Signal handling will be skipped.:UserWarning",
     "ignore::pytest.PytestUnhandledThreadExceptionWarning",
 ]
-timeout = 260
+timeout = 30
 
 [tool.coverage.run]
 omit = [

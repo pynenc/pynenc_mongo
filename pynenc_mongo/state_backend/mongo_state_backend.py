@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 from datetime import datetime
 from functools import cached_property
@@ -16,9 +17,12 @@ from pynenc_mongo.conf.config_state_backend import ConfigStateBackendMongo
 from pynenc_mongo.state_backend.mongo_state_backend_collections import (
     StateBackendCollections,
 )
+from pynenc_mongo.util.mongo_client import GridFSStorage
 
 if TYPE_CHECKING:
     from pynenc.app import Pynenc
+
+logger = logging.getLogger(__name__)
 
 
 class MongoStateBackend(BaseStateBackend[Params, Result]):
@@ -37,6 +41,9 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
         self.cols = StateBackendCollections(self.conf)
+        self._gridfs = GridFSStorage(
+            self.conf, collection_prefix="state_backend_gridfs"
+        )
 
     @cached_property
     def conf(self) -> ConfigStateBackendMongo:
@@ -82,22 +89,44 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         )
 
     def upsert_invocations(self, invocations: list["DistributedInvocation"]) -> None:
-        """Updates or inserts multiple invocations."""
+        """
+        Updates or inserts multiple invocations.
+
+        Uses GridFS for invocations with JSON exceeding the threshold.
+        """
         for invocation in invocations:
-            self.cols.state_backend_invocations.insert_or_ignore(
-                {
-                    "invocation_id": invocation.invocation_id,
-                    "invocation_json": invocation.to_json(),
-                }
-            )
+            inv_json = invocation.to_json()
+            if self._gridfs.should_use_gridfs(inv_json):
+                logger.warning(
+                    f"Storing large invocation ({len(inv_json)} bytes) in GridFS: "
+                    f"{invocation.invocation_id}"
+                )
+                gridfs_key = self._gridfs.store(invocation.invocation_id, inv_json)
+                self.cols.state_backend_invocations.insert_or_ignore(
+                    {
+                        "invocation_id": invocation.invocation_id,
+                        "gridfs_key": gridfs_key,
+                    }
+                )
+            else:
+                self.cols.state_backend_invocations.insert_or_ignore(
+                    {
+                        "invocation_id": invocation.invocation_id,
+                        "invocation_json": inv_json,
+                    }
+                )
 
     def _get_invocation(self, invocation_id: str) -> Optional["DistributedInvocation"]:
-        """Retrieves an invocation by its ID."""
+        """Retrieves an invocation by its ID, handling GridFS storage if needed."""
         doc = self.cols.state_backend_invocations.find_one(
             {"invocation_id": invocation_id}
         )
         if doc:
-            return DistributedInvocation.from_json(self.app, doc["invocation_json"])
+            if gridfs_key := doc.get("gridfs_key"):
+                inv_json = self._gridfs.retrieve(gridfs_key)
+            else:
+                inv_json = doc["invocation_json"]
+            return DistributedInvocation.from_json(self.app, inv_json)
         return None
 
     def _add_histories(
@@ -343,5 +372,6 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         return contexts
 
     def purge(self) -> None:
-        """Clear all state backend data."""
+        """Clear all state backend data including GridFS."""
+        self._gridfs.purge()
         self.cols.purge_all()
