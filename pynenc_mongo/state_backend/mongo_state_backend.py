@@ -17,7 +17,12 @@ from pynenc_mongo.conf.config_state_backend import ConfigStateBackendMongo
 from pynenc_mongo.state_backend.mongo_state_backend_collections import (
     StateBackendCollections,
 )
-from pynenc_mongo.util.mongo_client import GridFSStorage
+from pynenc_mongo.util.chunked_data import exceeds_bson_threshold
+from pynenc_mongo.util.mongo_utils import (
+    purge_chunked,
+    retrieve_chunked,
+    store_chunked,
+)
 
 if TYPE_CHECKING:
     from pynenc.app import Pynenc
@@ -41,9 +46,6 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
         self.cols = StateBackendCollections(self.conf)
-        self._gridfs = GridFSStorage(
-            self.conf, collection_prefix="state_backend_gridfs"
-        )
 
     @cached_property
     def conf(self) -> ConfigStateBackendMongo:
@@ -92,20 +94,26 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         """
         Updates or inserts multiple invocations.
 
-        Uses GridFS for invocations with JSON exceeding the threshold.
+        Large invocations exceeding the chunk threshold are compressed and
+        stored across multiple documents in the chunks collection.
         """
+        threshold = self.conf.chunk_threshold
         for invocation in invocations:
             inv_json = invocation.to_json()
-            if self._gridfs.should_use_gridfs(inv_json):
+            if exceeds_bson_threshold(inv_json, threshold):
                 logger.warning(
-                    f"Storing large invocation ({len(inv_json)} bytes) in GridFS: "
+                    f"Storing large invocation ({len(inv_json)} bytes) as chunks: "
                     f"{invocation.invocation_id}"
                 )
-                gridfs_key = self._gridfs.store(invocation.invocation_id, inv_json)
+                store_chunked(
+                    self.cols.state_backend_chunks,
+                    invocation.invocation_id,
+                    inv_json,
+                )
                 self.cols.state_backend_invocations.insert_or_ignore(
                     {
                         "invocation_id": invocation.invocation_id,
-                        "gridfs_key": gridfs_key,
+                        "chunked": True,
                     }
                 )
             else:
@@ -117,13 +125,15 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
                 )
 
     def _get_invocation(self, invocation_id: str) -> Optional["DistributedInvocation"]:
-        """Retrieves an invocation by its ID, handling GridFS storage if needed."""
+        """Retrieves an invocation by its ID, handling chunked storage if needed."""
         doc = self.cols.state_backend_invocations.find_one(
             {"invocation_id": invocation_id}
         )
         if doc:
-            if gridfs_key := doc.get("gridfs_key"):
-                inv_json = self._gridfs.retrieve(gridfs_key)
+            if doc.get("chunked"):
+                inv_json = retrieve_chunked(
+                    self.cols.state_backend_chunks, invocation_id
+                )
             else:
                 inv_json = doc["invocation_json"]
             return DistributedInvocation.from_json(self.app, inv_json)
@@ -372,6 +382,6 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         return contexts
 
     def purge(self) -> None:
-        """Clear all state backend data including GridFS."""
-        self._gridfs.purge()
+        """Clear all state backend data including chunked storage."""
+        purge_chunked(self.cols.state_backend_chunks)
         self.cols.purge_all()

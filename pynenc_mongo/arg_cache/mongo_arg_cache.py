@@ -7,8 +7,13 @@ from pymongo import ASCENDING, IndexModel
 from pynenc.arg_cache.base_arg_cache import BaseArgCache
 
 from pynenc_mongo.conf.config_arg_cache import ConfigArgCacheMongo
-from pynenc_mongo.util.mongo_client import GridFSStorage
+from pynenc_mongo.util.chunked_data import exceeds_bson_threshold
 from pynenc_mongo.util.mongo_collections import CollectionSpec, MongoCollections
+from pynenc_mongo.util.mongo_utils import (
+    purge_chunked,
+    retrieve_chunked,
+    store_chunked,
+)
 
 if TYPE_CHECKING:
     from pynenc.app import Pynenc
@@ -36,6 +41,18 @@ class ArgCacheCollections(MongoCollections):
         )
         return self.instantiate_retriable_coll(spec)
 
+    @cached_property
+    def arg_cache_chunks(self) -> "RetryableCollection":
+        """Collection for storing chunked arg cache values that exceed BSON limits."""
+        spec = CollectionSpec(
+            name="arg_cache_chunks",
+            indexes=[
+                IndexModel([("chunk_key", ASCENDING), ("seq", ASCENDING)], unique=True),
+                IndexModel([("chunk_key", ASCENDING)]),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)
+
 
 class MongoArgCache(BaseArgCache):
     """
@@ -43,13 +60,13 @@ class MongoArgCache(BaseArgCache):
 
     Uses MongoDB for cross-process argument caching and implements
     all required abstract methods from BaseArgCache. Large values exceeding
-    the GridFS threshold are stored in GridFS to avoid BSON size limits.
+    the chunk threshold are compressed and stored across multiple documents
+    in a dedicated chunks collection to avoid BSON size limits.
     """
 
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
         self.cols = ArgCacheCollections(self.conf)
-        self._gridfs = GridFSStorage(self.conf, collection_prefix="arg_cache_gridfs")
 
     @cached_property
     def conf(self) -> ConfigArgCacheMongo:
@@ -62,22 +79,22 @@ class MongoArgCache(BaseArgCache):
         """
         Store a key value pair in the cache.
 
-        Uses GridFS for values exceeding the threshold to avoid BSON size limits.
+        Large values exceeding the chunk threshold are compressed and stored
+        across multiple documents to avoid BSON size limits.
 
-        :param str key: The cache key
-        :param str value: The string value to cache
+        :param key: The cache key
+        :param value: The string value to cache
         """
-        if self._gridfs.should_use_gridfs(value):
+        if exceeds_bson_threshold(value, self.conf.chunk_threshold):
             logger.warning(
-                f"Storing large arg cache value ({len(value)} bytes) in GridFS: {key}"
+                f"Storing large arg cache value ({len(value)} bytes) as chunks: {key}"
             )
-            gridfs_key = self._gridfs.store(key, value)
-            # Store reference in collection for index/metadata
+            store_chunked(self.cols.arg_cache_chunks, key, value)
             self.cols.arg_cache.replace_one(
                 {"cache_key": key},
                 {
                     "cache_key": key,
-                    "gridfs_key": gridfs_key,
+                    "chunked": True,
                     "created_at": datetime.now(UTC),
                 },
                 upsert=True,
@@ -97,18 +114,18 @@ class MongoArgCache(BaseArgCache):
         """
         Retrieve a serialized value from the cache by its key.
 
-        :param str key: The cache key
+        :param key: The cache key
         :return: The cached serialized value
         :raises KeyError: If the key is not found
         """
         doc = self.cols.arg_cache.find_one({"cache_key": key})
         if doc:
-            if gridfs_key := doc.get("gridfs_key"):
-                return self._gridfs.retrieve(gridfs_key)
+            if doc.get("chunked"):
+                return retrieve_chunked(self.cols.arg_cache_chunks, key)
             return doc["cached_data"].decode("utf-8")
         raise KeyError(f"Cache key {key} not found")
 
     def _purge(self) -> None:
-        """Clear all cached data."""
-        self._gridfs.purge()
+        """Clear all cached data including chunked storage."""
+        purge_chunked(self.cols.arg_cache_chunks)
         self.cols.purge_all()

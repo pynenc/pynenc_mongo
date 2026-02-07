@@ -123,3 +123,15 @@ class StateBackendCollections(MongoCollections):
             ],
         )
         return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def state_backend_chunks(self) -> "RetryableCollection":
+        """Collection for storing chunked invocation data that exceeds BSON limits."""
+        spec = CollectionSpec(
+            name="state_backend_chunks",
+            indexes=[
+                IndexModel([("chunk_key", ASCENDING), ("seq", ASCENDING)], unique=True),
+                IndexModel([("chunk_key", ASCENDING)]),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)

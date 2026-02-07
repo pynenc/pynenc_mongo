@@ -7,7 +7,6 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from bson.objectid import ObjectId
-from gridfs import GridFS
 from pymongo import MongoClient as PyMongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
@@ -296,89 +295,3 @@ def get_mongo_client(conf: "ConfigMongo") -> PyMongoClient:
     }
 
     return PyMongoClient(**client_args | get_conn_args(conf))
-
-
-class GridFSStorage:
-    """
-    Utility for storing and retrieving large documents using GridFS.
-
-    Provides a simple key-value interface for storing data that may exceed
-    MongoDB's 16MB BSON document limit.
-    """
-
-    GRIDFS_PREFIX = "__gridfs__:"
-
-    def __init__(self, conf: "ConfigMongo", collection_prefix: str = "pynenc") -> None:
-        self.conf = conf
-        self._collection_prefix = collection_prefix
-        self._client = PynencMongoClient.get_instance(conf)
-        self._gridfs: GridFS | None = None
-
-    @property
-    def gridfs(self) -> GridFS:
-        """Get or create the GridFS instance."""
-        if self._gridfs is None:
-            db: Database = self._client._client[self.conf.mongo_db]
-            self._gridfs = GridFS(db, collection=self._collection_prefix)
-        return self._gridfs
-
-    def should_use_gridfs(self, data: str | bytes) -> bool:
-        """Check if data exceeds the threshold for GridFS storage."""
-        size = len(data.encode("utf-8")) if isinstance(data, str) else len(data)
-        return size >= self.conf.gridfs_threshold
-
-    def store(self, key: str, data: str | bytes) -> str:
-        """
-        Store data in GridFS.
-
-        :param key: Unique identifier for the data
-        :param data: Data to store (string or bytes)
-        :return: The key prefixed with GridFS marker
-        """
-        data_bytes = data.encode("utf-8") if isinstance(data, str) else data
-        # Delete existing file with this key if present
-        existing = self.gridfs.find_one({"filename": key})
-        if existing:
-            self.gridfs.delete(existing._id)
-        self.gridfs.put(data_bytes, filename=key)
-        logger.debug(f"Stored {len(data_bytes)} bytes in GridFS with key: {key}")
-        return f"{self.GRIDFS_PREFIX}{key}"
-
-    def retrieve(self, key: str) -> str:
-        """
-        Retrieve data from GridFS.
-
-        :param key: The key (with or without GridFS prefix)
-        :return: The stored data as string
-        :raises KeyError: If key not found
-        """
-        actual_key = (
-            key[len(self.GRIDFS_PREFIX) :]
-            if key.startswith(self.GRIDFS_PREFIX)
-            else key
-        )
-        grid_out = self.gridfs.find_one({"filename": actual_key})
-        if grid_out is None:
-            raise KeyError(f"GridFS key {actual_key} not found")
-        return grid_out.read().decode("utf-8")
-
-    def delete(self, key: str) -> None:
-        """Delete data from GridFS."""
-        actual_key = (
-            key[len(self.GRIDFS_PREFIX) :]
-            if key.startswith(self.GRIDFS_PREFIX)
-            else key
-        )
-        existing = self.gridfs.find_one({"filename": actual_key})
-        if existing:
-            self.gridfs.delete(existing._id)
-
-    def purge(self) -> None:
-        """Delete all files in this GridFS collection."""
-        for grid_file in self.gridfs.find():
-            self.gridfs.delete(grid_file._id)
-
-    @classmethod
-    def is_gridfs_key(cls, key: str) -> bool:
-        """Check if a key indicates GridFS storage."""
-        return key.startswith(cls.GRIDFS_PREFIX)
