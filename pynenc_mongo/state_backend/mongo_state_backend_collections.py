@@ -126,11 +126,19 @@ class StateBackendCollections(MongoCollections):
 
     @cached_property
     def state_backend_chunks(self) -> "RetryableCollection":
-        """Collection for storing chunked invocation data that exceeds BSON limits."""
+        """Collection for storing chunked data exceeding BSON limits.
+
+        Chunk documents structure:
+            - chunk_key: "{invocation_id}:{data_type}:{item_key}"
+            - seq: 0-based sequence number for chunk ordering
+            - data: binary compressed chunk payload
+        """
         spec = CollectionSpec(
             name="state_backend_chunks",
             indexes=[
+                # Primary index for retrieval (ordered by seq for reassembly)
                 IndexModel([("chunk_key", ASCENDING), ("seq", ASCENDING)], unique=True),
+                # Secondary index for deletion operations
                 IndexModel([("chunk_key", ASCENDING)]),
             ],
         )

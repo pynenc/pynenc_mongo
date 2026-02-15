@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from pymongo import ASCENDING, IndexModel
 from pynenc.broker.base_broker import BaseBroker
+from pynenc.identifiers.invocation_id import InvocationId
 
 from pynenc_mongo.conf.config_broker import ConfigBrokerMongo
 from pynenc_mongo.util.mongo_collections import CollectionSpec, MongoCollections
@@ -63,7 +64,7 @@ class MongoBroker(BaseBroker):
             }
         )
 
-    def route_invocations(self, invocation_ids: list[str]) -> None:
+    def route_invocations(self, invocation_ids: list["InvocationId"]) -> None:
         """
         Route multiple invocation IDs to the message queue.
 
@@ -81,7 +82,7 @@ class MongoBroker(BaseBroker):
         ]
         self.cols.broker_message_queue.insert_many(documents)
 
-    def retrieve_invocation(self) -> str | None:
+    def retrieve_invocation(self) -> "InvocationId | None":
         """
         Atomically retrieve and remove a single invocation ID from the queue.
 
@@ -95,7 +96,7 @@ class MongoBroker(BaseBroker):
         )
 
         if document:
-            return document["invocation_id"]
+            return InvocationId(document["invocation_id"])
         return None
 
     def count_invocations(self) -> int:

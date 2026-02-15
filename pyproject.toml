@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "pynenc>=0.1.0rc101.dev147",
+    "pynenc>=0.1.0rc101.dev149",
     "pymongo>=3.12.2,<3.13",
 ]
 
@@ -40,7 +40,7 @@ mongo_builder = "pynenc_mongo.builder:MongoBuilderPlugin"
 mongo_orchestrator = "pynenc_mongo.orchestrator.mongo_orchestrator"
 mongo_state_backend = "pynenc_mongo.state_backend.mongo_state_backend"
 mongo_broker = "pynenc_mongo.broker.mongo_broker"
-mongo_arg_cache = "pynenc_mongo.arg_cache.mongo_arg_cache"
+mongo_client_data_store = "pynenc_mongo.client_data_store.mongo_client_data_store"
 mongo_trigger = "pynenc_mongo.trigger.mongo_trigger"
 
 [dependency-groups]
@@ -59,10 +59,10 @@ dev = [
     "testcontainers[mongodb]>=4.13.0",
 ]
 tests = [
-    "pynenc[tests]>=0.1.0rc101.dev126",
+    "pynenc[tests]>=0.1.0rc101.dev149",
 ]
 monitor = [
-    "pynenc[monitor]>=0.1.0rc101.dev126",
+    "pynenc[monitor]>=0.1.0rc101.dev149",
 ]
 docs = [
     "sphinx>=7.0",

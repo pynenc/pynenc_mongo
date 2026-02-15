@@ -7,7 +7,7 @@ pynenc-mongo plugin package.
 Key components:
 - MongoBuilderPlugin: Plugin class that registers Mongo methods
 - mongo(): Main method for full Mongo stack configuration
-- mongo_arg_cache(): Mongo-specific argument caching method
+- mongo_client_data_store(): Mongo-specific client data store method
 - mongo_trigger(): Mongo-specific trigger system method
 """
 
@@ -33,7 +33,9 @@ class MongoBuilderPlugin:
         builder_class.register_plugin_method("mongo", mongo)
 
         # Register component-specific methods
-        builder_class.register_plugin_method("mongo_arg_cache", mongo_arg_cache)
+        builder_class.register_plugin_method(
+            "mongo_client_data_store", mongo_client_data_store
+        )
         builder_class.register_plugin_method("mongo_trigger", mongo_trigger)
 
         # Register configuration validator
@@ -100,7 +102,7 @@ def mongo(
             "orchestrator_cls": "MongoOrchestrator",
             "broker_cls": "MongoBroker",
             "state_backend_cls": "MongoStateBackend",
-            "arg_cache_cls": "MongoArgCache",
+            "client_data_store_cls": "MongoClientDataStore",
             "trigger_cls": "MongoTrigger",
         }
     )
@@ -109,15 +111,16 @@ def mongo(
     return builder
 
 
-def mongo_arg_cache(
+def mongo_client_data_store(
     builder: "PynencBuilder",
     min_size_to_cache: int = 1024,
     local_cache_size: int = 1024,
+    max_size_to_cache: int = 16 * 1024 * 1024,
 ) -> "PynencBuilder":
     """
-    Configure Mongo-based argument caching.
+    Configure Mongo-based client data store.
 
-    This method configures the Mongo argument cache with the specified parameters.
+    This method configures the Mongo client data store with the specified parameters.
     It requires that Mongo components have been configured either through mongo()
     or through configuration files.
 
@@ -125,18 +128,20 @@ def mongo_arg_cache(
     :param int min_size_to_cache: Minimum string length (in characters) required to cache an argument.
         Arguments smaller than this size will be passed directly. Default is 1024 characters (roughly 1KB)
     :param int local_cache_size: Maximum number of items to cache locally. Default is 1024
+    :param int max_size_to_cache: Maximum size of an argument to cache. Default is 16MB
     :return: The builder instance for method chaining
     :raises ValueError: If Mongo configuration is not present
     """
     if "mongo" not in builder._plugin_components and "mongo_url" not in builder._config:
         raise ValueError(
-            "Mongo arg cache requires mongo configuration. Call mongo() first."
+            "Mongo client data store requires mongo configuration. Call mongo() first."
         )
 
     builder._config.update(
         {
-            "arg_cache_cls": "MongoArgCache",
+            "client_data_store_cls": "MongoClientDataStore",
             "min_size_to_cache": min_size_to_cache,
+            "max_size_to_cache": max_size_to_cache,
             "local_cache_size": local_cache_size,
         }
     )
@@ -197,7 +202,7 @@ def validate_mongo_config(config: dict[str, Any]) -> None:
             "orchestrator_cls",
             "broker_cls",
             "state_backend_cls",
-            "arg_cache_cls",
+            "client_data_store_cls",
             "trigger_cls",
         ]
     )

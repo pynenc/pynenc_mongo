@@ -13,12 +13,11 @@ Key components:
 
 import logging
 import zlib
+from typing import Any
+
+from bson import BSON
 
 logger = logging.getLogger(__name__)
-
-# Conservative limit: 14MB per chunk to stay safely under MongoDB's 16MB BSON limit
-# accounting for document overhead (key names, _id, metadata fields)
-DEFAULT_CHUNK_BYTES = 14 * 1024 * 1024
 
 
 def compress(data: str) -> bytes:
@@ -44,9 +43,7 @@ def decompress(data: bytes) -> str:
     return zlib.decompress(data).decode("utf-8")
 
 
-def split_into_chunks(
-    data: bytes, chunk_size: int = DEFAULT_CHUNK_BYTES
-) -> list[bytes]:
+def split_into_chunks(data: bytes, chunk_size: int) -> list[bytes]:
     """
     Split bytes into ordered chunks of at most chunk_size bytes.
 
@@ -67,12 +64,14 @@ def reassemble_chunks(chunks: list[bytes]) -> bytes:
     return b"".join(chunks)
 
 
-def exceeds_bson_threshold(data: str, threshold: int) -> bool:
+def exceeds_bson_threshold(data: dict[str, str] | str, threshold: int) -> bool:
     """
-    Check if a string exceeds the size threshold for a single BSON document.
+    Check if a string or dict of strings exceeds the size threshold for a single BSON document.
 
-    :param data: The string to check
+    :param data: The string or dict of strings to check
     :param threshold: Size threshold in bytes
     :return: True if the encoded data exceeds the threshold
     """
-    return len(data.encode("utf-8")) >= threshold
+    doc: dict[str, Any] = {"payload": data} if isinstance(data, str) else data
+    encoded = BSON.encode(doc)
+    return len(encoded) > threshold

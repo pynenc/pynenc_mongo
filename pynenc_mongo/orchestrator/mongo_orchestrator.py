@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from functools import cached_property
 from time import sleep, time
@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 
 from pymongo import ReturnDocument
 from pynenc.exceptions import (
-    CycleDetectedError,
     InvocationStatusError,
     InvocationStatusRaceConditionError,
 )
+from pynenc.identifiers.invocation_id import InvocationId
 from pynenc.invocation.status import (
     InvocationStatus,
     InvocationStatusRecord,
@@ -19,7 +19,6 @@ from pynenc.invocation.status import (
 from pynenc.orchestrator.atomic_service import ActiveRunnerInfo
 from pynenc.orchestrator.base_orchestrator import (
     BaseBlockingControl,
-    BaseCycleControl,
     BaseOrchestrator,
 )
 
@@ -30,121 +29,10 @@ from pynenc_mongo.orchestrator.mongo_orchestrator_collections import (
 
 if TYPE_CHECKING:
     from pynenc.app import Pynenc
+    from pynenc.identifiers.call_id import CallId
     from pynenc.invocation.dist_invocation import DistributedInvocation
-    from pynenc.task import Task
+    from pynenc.task import Task, TaskId
     from pynenc.types import Params, Result
-
-
-class MongoCycleControl(BaseCycleControl):
-    """Cycle control for MongoOrchestrator using MongoDB for cross-process cycle detection."""
-
-    def __init__(self, app: "Pynenc", cols: OrchestratorCollections) -> None:
-        self.app = app
-        self.cols = cols
-
-    def add_call_and_check_cycles(
-        self, caller: "DistributedInvocation", callee: "DistributedInvocation"
-    ) -> None:
-        """Add a call dependency and check for cycles using graph traversal."""
-        # Check for direct self-cycle first
-        if caller.call_id == callee.call_id:
-            raise CycleDetectedError.from_cycle([caller.call_id])
-        if cycle := self._find_cycle_caused_by_new_edge(caller.call_id, callee.call_id):
-            raise CycleDetectedError.from_cycle(cycle)
-
-        # Add calls to tracking (only store call_id, no heavy JSON)
-        self.cols.orchestrator_cycle_calls.insert_or_ignore({"call_id": caller.call_id})
-        self.cols.orchestrator_cycle_calls.insert_or_ignore({"call_id": callee.call_id})
-        self.cols.orchestrator_cycle_edges.insert_or_ignore(
-            {"caller_id": caller.call_id, "callee_id": callee.call_id}
-        )
-
-    def get_callees(self, caller_call_id: str) -> Iterator[str]:
-        """Returns an iterator of direct callee call_ids for the given caller_call_id."""
-        docs = self.cols.orchestrator_cycle_edges.find({"caller_id": caller_call_id})
-        for doc in docs:
-            yield doc["callee_id"]
-
-    def _find_cycle_with_new_edge(
-        self, caller_id: str, callee_id: str
-    ) -> list[str] | None:
-        """Find cycle that would be caused by adding a new edge from caller to callee."""
-        visited: set[str] = set()
-        path: list[str] = []
-
-        def get_edges(call_id: str) -> list[str]:
-            edges = [
-                doc["callee_id"]
-                for doc in self.cols.orchestrator_cycle_edges.find(
-                    {"caller_id": call_id}
-                )
-            ]
-            if call_id == caller_id and callee_id not in edges:
-                edges.append(callee_id)
-            return edges
-
-        return self._find_cycle_dfs(caller_id, visited, path, get_edges)
-
-    def _find_cycle_dfs(
-        self,
-        current_id: str,
-        visited: set[str],
-        path: list[str],
-        get_edges: Callable[[str], list[str]],
-    ) -> list[str] | None:
-        """DFS utility to find cycles."""
-        visited.add(current_id)
-        path.append(current_id)
-
-        for next_id in get_edges(current_id):
-            if next_id not in visited:
-                cycle = self._find_cycle_dfs(next_id, visited, path, get_edges)
-                if cycle:
-                    return cycle
-            elif next_id in path:
-                cycle_start_idx = path.index(next_id)
-                return path[cycle_start_idx:]
-
-        path.remove(current_id)
-        return None
-
-    def _find_cycle_caused_by_new_edge(
-        self, caller_id: str, callee_id: str
-    ) -> list[str]:
-        """
-        Check if adding a new edge from caller to callee would create a cycle.
-
-        Uses DFS to detect cycles by temporarily considering the new edge.
-
-        :param caller_id: The call_id of the caller invocation.
-        :param callee_id: The call_id of the callee invocation.
-        :return: List of call_ids forming the cycle, or empty list if no cycle.
-        """
-        visited: set[str] = set()
-        path: list[str] = []
-
-        def get_edges(call_id: str) -> list[str]:
-            edges = [
-                doc["callee_id"]
-                for doc in self.cols.orchestrator_cycle_edges.find(
-                    {"caller_id": call_id}
-                )
-            ]
-            # Include the temporary edge we're checking
-            if call_id == caller_id and callee_id not in edges:
-                edges.append(callee_id)
-            return edges
-
-        return self._find_cycle_dfs(caller_id, visited, path, get_edges) or []
-
-    def clean_up_invocation_cycles(self, invocation_id: str) -> None:
-        """Clean up cycle tracking data for a completed invocation."""
-        call_id = self.app.orchestrator.get_invocation_call_id(invocation_id)
-        if not self.app.orchestrator.any_non_final_invocations(call_id):
-            self.cols.orchestrator_cycle_calls.delete_one({"call_id": call_id})
-            self.cols.orchestrator_cycle_edges.delete_many(
-                {"$or": [{"caller_id": call_id}, {"callee_id": call_id}]}
-            )
 
 
 class MongoBlockingControl(BaseBlockingControl):
@@ -155,7 +43,9 @@ class MongoBlockingControl(BaseBlockingControl):
         self.cols = cols
 
     def waiting_for_results(
-        self, caller_invocation_id: str, result_invocation_ids: list[str]
+        self,
+        caller_invocation_id: "InvocationId | None",
+        result_invocation_ids: list["InvocationId"],
     ) -> None:
         """Notifies the system that an invocation is waiting for the results of other invocations."""
         for waited_id in result_invocation_ids:
@@ -163,13 +53,15 @@ class MongoBlockingControl(BaseBlockingControl):
                 {"waiter_id": caller_invocation_id, "waited_id": waited_id}
             )
 
-    def release_waiters(self, waited_invocation_id: str) -> None:
+    def release_waiters(self, waited_invocation_id: "InvocationId") -> None:
         """Removes an invocation from the graph, along with any dependencies related to it."""
         self.cols.orchestrator_blocking_edges.delete_many(
             {"waited_id": waited_invocation_id}
         )
 
-    def get_blocking_invocations(self, max_num_invocations: int) -> Iterator[str]:
+    def get_blocking_invocations(
+        self, max_num_invocations: int
+    ) -> Iterator["InvocationId"]:
         """
         Retrieves invocations that are blocking others but are not themselves waiting for any results.
 
@@ -212,7 +104,7 @@ class MongoBlockingControl(BaseBlockingControl):
             waited_id = doc["waited_id"]
             if waited_id not in seen:
                 seen.add(waited_id)
-                yield waited_id
+                yield InvocationId(waited_id)
 
 
 class MongoOrchestrator(BaseOrchestrator):
@@ -231,7 +123,6 @@ class MongoOrchestrator(BaseOrchestrator):
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
         self.cols = OrchestratorCollections(self.conf)
-        self._cycle_control = MongoCycleControl(app, self.cols)
         self._blocking_control = MongoBlockingControl(app, self.cols)
 
     @cached_property
@@ -240,11 +131,6 @@ class MongoOrchestrator(BaseOrchestrator):
             config_values=self.app.config_values,
             config_filepath=self.app.config_filepath,
         )
-
-    @property
-    def cycle_control(self) -> BaseCycleControl:
-        """Return cycle control."""
-        return self._cycle_control
 
     @property
     def blocking_control(self) -> BaseBlockingControl:
@@ -262,8 +148,8 @@ class MongoOrchestrator(BaseOrchestrator):
             self.cols.orchestrator_invocations.insert_or_ignore(
                 {
                     "invocation_id": invocation.invocation_id,
-                    "task_id": invocation.task.task_id,
-                    "call_id": invocation.call_id,
+                    "task_id_key": invocation.task.task_id.key,
+                    "call_id_key": invocation.call.call_id.key,
                     "status": status_record.status.value,
                     "status_runner_id": status_record.runner_id,
                     "status_timestamp": status_record.timestamp,
@@ -279,9 +165,9 @@ class MongoOrchestrator(BaseOrchestrator):
         task: "Task[Params, Result]",
         key_serialized_arguments: dict[str, str] | None = None,
         statuses: list[InvocationStatus] | None = None,
-    ) -> Iterator[str]:
+    ) -> Iterator["InvocationId"]:
         """Get existing invocation IDs for a task, optionally filtered by arguments and statuses."""
-        query: dict = {"task_id": task.task_id}
+        query: dict = {"task_id_key": task.task_id.key}
         if statuses:
             query["status"] = {"$in": [s.value for s in statuses]}
 
@@ -311,21 +197,21 @@ class MongoOrchestrator(BaseOrchestrator):
             docs = self.cols.orchestrator_invocations.find(query)
 
         for doc in docs:
-            yield doc["invocation_id"]
+            yield InvocationId(doc["invocation_id"])
 
-    def get_task_invocation_ids(self, task_id: str) -> Iterator[str]:
+    def get_task_invocation_ids(self, task_id: "TaskId") -> Iterator["InvocationId"]:
         """Retrieves all invocation IDs for a given task ID."""
-        docs = self.cols.orchestrator_invocations.find({"task_id": task_id})
+        docs = self.cols.orchestrator_invocations.find({"task_id_key": task_id.key})
         for doc in docs:
-            yield doc["invocation_id"]
+            yield InvocationId(doc["invocation_id"])
 
     def get_invocation_ids_paginated(
         self,
-        task_id: str | None = None,
+        task_id: "TaskId | None" = None,
         statuses: list[InvocationStatus] | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[str]:
+    ) -> list["InvocationId"]:
         """
         Retrieve invocation IDs with pagination support.
 
@@ -339,7 +225,7 @@ class MongoOrchestrator(BaseOrchestrator):
         """
         query: dict = {}
         if task_id:
-            query["task_id"] = task_id
+            query["task_id_key"] = task_id.key
         if statuses:
             query["status"] = {"$in": [s.value for s in statuses]}
 
@@ -349,11 +235,11 @@ class MongoOrchestrator(BaseOrchestrator):
             .skip(offset)
             .limit(limit)
         )
-        return [doc["invocation_id"] for doc in docs]
+        return [InvocationId(doc["invocation_id"]) for doc in docs]
 
     def count_invocations(
         self,
-        task_id: str | None = None,
+        task_id: "TaskId | None" = None,
         statuses: list[InvocationStatus] | None = None,
     ) -> int:
         """
@@ -365,26 +251,17 @@ class MongoOrchestrator(BaseOrchestrator):
         """
         query: dict = {}
         if task_id:
-            query["task_id"] = task_id
+            query["task_id_key"] = task_id.key
         if statuses:
             query["status"] = {"$in": [s.value for s in statuses]}
 
         return self.cols.orchestrator_invocations.count_documents(query)
 
-    def get_call_invocation_ids(self, call_id: str) -> Iterator[str]:
+    def get_call_invocation_ids(self, call_id: "CallId") -> Iterator["InvocationId"]:
         """Retrieves all invocation IDs for a given call ID."""
-        docs = self.cols.orchestrator_invocations.find({"call_id": call_id})
+        docs = self.cols.orchestrator_invocations.find({"call_id_key": call_id})
         for doc in docs:
-            yield doc["invocation_id"]
-
-    def get_invocation_call_id(self, invocation_id: str) -> str:
-        """Retrieves the call ID associated with a specific invocation ID."""
-        doc = self.cols.orchestrator_invocations.find_one(
-            {"invocation_id": invocation_id}
-        )
-        if not doc:
-            raise KeyError(f"Invocation ID {invocation_id} not found")
-        return doc["call_id"]
+            yield InvocationId(doc["invocation_id"])
 
     def any_non_final_invocations(self, call_id: str) -> bool:
         """Checks if there are any non-final invocations for a specific call ID."""
@@ -529,7 +406,7 @@ class MongoOrchestrator(BaseOrchestrator):
         invocation: "DistributedInvocation[Params, Result]",
     ) -> None:
         """Index invocation arguments for concurrency control."""
-        for key, value in invocation.serialized_arguments.items():
+        for key, value in invocation.call.serialized_arguments.items():
             self.cols.orchestrator_invocation_args.insert_or_ignore(
                 {
                     "invocation_id": invocation.invocation_id,
@@ -538,7 +415,7 @@ class MongoOrchestrator(BaseOrchestrator):
                 }
             )
 
-    def set_up_invocation_auto_purge(self, invocation_id: str) -> None:
+    def set_up_invocation_auto_purge(self, invocation_id: "InvocationId") -> None:
         """Set up invocation for auto-purging by setting the auto_purge_timestamp."""
         self.cols.orchestrator_invocations.update_one(
             {"invocation_id": invocation_id}, {"$set": {"auto_purge_timestamp": time()}}
@@ -551,8 +428,7 @@ class MongoOrchestrator(BaseOrchestrator):
             {"auto_purge_timestamp": {"$ne": None, "$lte": threshold}}
         )
         for doc in docs:
-            invocation_id = doc["invocation_id"]
-            self.cycle_control.clean_up_invocation_cycles(invocation_id)
+            invocation_id = InvocationId(doc["invocation_id"])
             self.blocking_control.release_waiters(invocation_id)
             self.cols.orchestrator_invocations.delete_one(
                 {"invocation_id": invocation_id}
@@ -562,7 +438,7 @@ class MongoOrchestrator(BaseOrchestrator):
             )
 
     def get_invocation_status_record(
-        self, invocation_id: str
+        self, invocation_id: "InvocationId"
     ) -> InvocationStatusRecord:
         """Get the current status of an invocation by ID, handling pending timeouts."""
         doc = self.cols.orchestrator_invocations.find_one(
@@ -576,13 +452,13 @@ class MongoOrchestrator(BaseOrchestrator):
             doc["status_timestamp"],
         )
 
-    def increment_invocation_retries(self, invocation_id: str) -> None:
+    def increment_invocation_retries(self, invocation_id: "InvocationId") -> None:
         """Increment the retry count for an invocation by ID."""
         self.cols.orchestrator_invocations.update_one(
             {"invocation_id": invocation_id}, {"$inc": {"retry_count": 1}}
         )
 
-    def get_invocation_retries(self, invocation_id: str) -> int:
+    def get_invocation_retries(self, invocation_id: "InvocationId") -> int:
         """Get the number of retries for an invocation by ID."""
         doc = self.cols.orchestrator_invocations.find_one(
             {"invocation_id": invocation_id}
@@ -590,8 +466,10 @@ class MongoOrchestrator(BaseOrchestrator):
         return doc.get("retry_count", 0) if doc else 0
 
     def filter_by_status(
-        self, invocation_ids: list[str], status_filter: frozenset["InvocationStatus"]
-    ) -> list[str]:
+        self,
+        invocation_ids: list["InvocationId"],
+        status_filter: frozenset["InvocationStatus"],
+    ) -> list["InvocationId"]:
         """Filter invocations by status by ID."""
         if not invocation_ids or not status_filter:
             return []
@@ -601,7 +479,7 @@ class MongoOrchestrator(BaseOrchestrator):
                 "status": {"$in": [s.value for s in status_filter]},
             }
         )
-        return [doc["invocation_id"] for doc in docs]
+        return [InvocationId(doc["invocation_id"]) for doc in docs]
 
     def register_runner_heartbeats(
         self,
@@ -696,7 +574,7 @@ class MongoOrchestrator(BaseOrchestrator):
 
         return active_runners
 
-    def get_pending_invocations_for_recovery(self) -> Iterator[str]:
+    def get_pending_invocations_for_recovery(self) -> Iterator["InvocationId"]:
         """
         Retrieve invocation IDs stuck in PENDING status beyond the allowed time.
 
@@ -715,11 +593,11 @@ class MongoOrchestrator(BaseOrchestrator):
         )
 
         for doc in docs:
-            yield doc["invocation_id"]
+            yield InvocationId(doc["invocation_id"])
 
     def _get_running_invocations_for_recovery(
         self, timeout_seconds: float
-    ) -> Iterator[str]:
+    ) -> Iterator["InvocationId"]:
         """
         Retrieve invocation IDs in RUNNING status owned by inactive runners.
 
@@ -776,7 +654,7 @@ class MongoOrchestrator(BaseOrchestrator):
                 self.app.logger.info(
                     f"Invocation to recover: {invocation['invocation_id']}"
                 )
-                yield invocation["invocation_id"]
+                yield InvocationId(invocation["invocation_id"])
 
     def purge(self) -> None:
         """Clear all orchestrator state."""

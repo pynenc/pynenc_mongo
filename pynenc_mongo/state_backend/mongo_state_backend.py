@@ -1,13 +1,18 @@
 import logging
 from collections.abc import Iterator
 from datetime import datetime
+from enum import StrEnum, auto
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from pymongo import ASCENDING
 from pymongo.errors import DuplicateKeyError
 from pynenc.app_info import AppInfo
-from pynenc.invocation.dist_invocation import DistributedInvocation
+from pynenc.identifiers.call_id import CallId
+from pynenc.identifiers.invocation_id import InvocationId
+from pynenc.identifiers.task_id import TaskId
+from pynenc.invocation.dist_invocation import InvocationDTO
+from pynenc.models.call_dto import CallDTO
 from pynenc.runner.runner_context import RunnerContext
 from pynenc.state_backend.base_state_backend import BaseStateBackend, InvocationHistory
 from pynenc.types import Params, Result
@@ -17,17 +22,24 @@ from pynenc_mongo.conf.config_state_backend import ConfigStateBackendMongo
 from pynenc_mongo.state_backend.mongo_state_backend_collections import (
     StateBackendCollections,
 )
-from pynenc_mongo.util.chunked_data import exceeds_bson_threshold
-from pynenc_mongo.util.mongo_utils import (
-    purge_chunked,
-    retrieve_chunked,
-    store_chunked,
+from pynenc_mongo.util.mongo_chunk_data import (
+    build_chunk_key,
+    prepare_chunk_storage,
+    retrieve_chunk_storage,
 )
 
 if TYPE_CHECKING:
     from pynenc.app import Pynenc
 
 logger = logging.getLogger(__name__)
+
+
+class ChunkPrefix(StrEnum):
+    """Key prefixes for different data types in chunk storage."""
+
+    ARGS = auto()  # Task invocation arguments
+    RESULT = auto()  # Task invocation result
+    EXCEPTION = auto()  # Task invocation exception
 
 
 class MongoStateBackend(BaseStateBackend[Params, Result]):
@@ -85,62 +97,74 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         self.cols.state_backend_workflows.insert_or_ignore(
             {
                 "workflow_id": w_id.workflow_id,
-                "workflow_type": w_id.workflow_type,
-                "workflow_json": w_id.to_json(),
+                "workflow_type_key": w_id.workflow_type.key,
+                "parent_workflow_id": w_id.parent_workflow_id,
             }
         )
 
-    def upsert_invocations(self, invocations: list["DistributedInvocation"]) -> None:
-        """
-        Updates or inserts multiple invocations.
+    def _upsert_invocations(
+        self, entries: list[tuple["InvocationDTO", "CallDTO"]]
+    ) -> None:
+        """Store invocations with automatic argument chunking when needed."""
+        for inv_dto, call_dto in entries:
+            # Prepare arguments storage (inline or chunked)
+            args_storage = prepare_chunk_storage(
+                self.cols.state_backend_chunks,
+                build_chunk_key(
+                    invocation_id=inv_dto.invocation_id, prefix=ChunkPrefix.ARGS.value
+                ),
+                call_dto.serialized_arguments,
+                self.conf.chunk_threshold,
+            )
+            inv_dict = {
+                "invocation_id": inv_dto.invocation_id,
+                "call_id_key": inv_dto.call_id.key,
+                "task_id_key": inv_dto.call_id.task_id.key,
+                "workflow_id": inv_dto.workflow.workflow_id,
+                "workflow_type_key": inv_dto.workflow.workflow_type.key,
+                "parent_workflow_id": inv_dto.workflow.parent_workflow_id,
+                "parent_invocation_id": inv_dto.parent_invocation_id,
+                "arguments": args_storage,
+            }
+            self.cols.state_backend_invocations.insert_or_ignore(inv_dict)
 
-        Large invocations exceeding the chunk threshold are compressed and
-        stored across multiple documents in the chunks collection.
-        """
-        threshold = self.conf.chunk_threshold
-        for invocation in invocations:
-            inv_json = invocation.to_json()
-            if exceeds_bson_threshold(inv_json, threshold):
-                logger.warning(
-                    f"Storing large invocation ({len(inv_json)} bytes) as chunks: "
-                    f"{invocation.invocation_id}"
-                )
-                store_chunked(
-                    self.cols.state_backend_chunks,
-                    invocation.invocation_id,
-                    inv_json,
-                )
-                self.cols.state_backend_invocations.insert_or_ignore(
-                    {
-                        "invocation_id": invocation.invocation_id,
-                        "chunked": True,
-                    }
-                )
-            else:
-                self.cols.state_backend_invocations.insert_or_ignore(
-                    {
-                        "invocation_id": invocation.invocation_id,
-                        "invocation_json": inv_json,
-                    }
-                )
-
-    def _get_invocation(self, invocation_id: str) -> Optional["DistributedInvocation"]:
-        """Retrieves an invocation by its ID, handling chunked storage if needed."""
+    def _get_invocation(
+        self, invocation_id: str
+    ) -> tuple["InvocationDTO", "CallDTO"] | None:
+        """Retrieve invocation, reconstructing arguments from chunks if needed."""
         doc = self.cols.state_backend_invocations.find_one(
             {"invocation_id": invocation_id}
         )
-        if doc:
-            if doc.get("chunked"):
-                inv_json = retrieve_chunked(
-                    self.cols.state_backend_chunks, invocation_id
-                )
-            else:
-                inv_json = doc["invocation_json"]
-            return DistributedInvocation.from_json(self.app, inv_json)
-        return None
+        if not doc:
+            return None
+
+        # Retrieve arguments (inline or from chunks)
+        serialized_arguments = retrieve_chunk_storage(
+            self.cols.state_backend_chunks,
+            build_chunk_key(invocation_id=invocation_id, prefix=ChunkPrefix.ARGS.value),
+            doc["arguments"],
+        )
+        assert isinstance(serialized_arguments, dict)
+        p_w_id = doc["parent_workflow_id"]
+        workflow = WorkflowIdentity(
+            workflow_id=InvocationId(doc["workflow_id"]),
+            workflow_type=TaskId.from_key(doc["workflow_type_key"]),
+            parent_workflow_id=(InvocationId(p_w_id) if p_w_id else None),
+        )
+        p_i_id = doc["parent_invocation_id"]
+        inv_dto = InvocationDTO(
+            invocation_id=InvocationId(invocation_id),
+            call_id=CallId.from_key(doc["call_id_key"]),
+            workflow=workflow,
+            parent_invocation_id=(InvocationId(p_i_id) if p_i_id else None),
+        )
+        call_dto = CallDTO(inv_dto.call_id, serialized_arguments)
+        return inv_dto, call_dto
 
     def _add_histories(
-        self, invocation_ids: list[str], invocation_history: "InvocationHistory"
+        self,
+        invocation_ids: list["InvocationId"],
+        invocation_history: "InvocationHistory",
     ) -> None:
         """Adds the same history record for a list of invocations."""
         for invocation_id in invocation_ids:
@@ -158,7 +182,7 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
                     f"Error adding {invocation_history=} already exists: {e}"
                 )
 
-    def _get_history(self, invocation_id: str) -> list["InvocationHistory"]:
+    def _get_history(self, invocation_id: "InvocationId") -> list["InvocationHistory"]:
         """Retrieves the history of an invocation ordered by timestamp."""
         docs = self.cols.state_backend_history.find(
             {"invocation_id": invocation_id}
@@ -170,7 +194,7 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         start_time: datetime,
         end_time: datetime,
         batch_size: int = 100,
-    ) -> Iterator[list[str]]:
+    ) -> Iterator[list["InvocationId"]]:
         """
         Iterate over invocation IDs that have history within time range.
 
@@ -196,10 +220,10 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         ]
 
         cursor = self.cols.state_backend_history.aggregate(pipeline)
-        batch: list[str] = []
+        batch: list["InvocationId"] = []
 
         for doc in cursor:
-            batch.append(doc["_id"])
+            batch.append(InvocationId(doc["_id"]))
             if len(batch) >= batch_size:
                 yield batch
                 batch = []
@@ -246,49 +270,85 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         if batch:
             yield batch
 
-    def _get_result(self, invocation_id: str) -> Result:
-        """Retrieves the result of an invocation by ID."""
-        doc = self.cols.state_backend_results.find_one({"invocation_id": invocation_id})
-        if doc:
-            return self.app.serializer.deserialize(doc["result_data"])
-        raise KeyError(f"Result for invocation {invocation_id} not found")
+    def _get_result(self, invocation_id: "InvocationId") -> str:
+        """Retrieve result, decompressing from chunks if needed."""
+        doc = self.cols.state_backend_results.find_one(
+            {"invocation_id": InvocationId(invocation_id)}
+        )
+        if not doc:
+            raise KeyError(f"Result for invocation {invocation_id} not found")
+        # Unwrap from fake sub-document {"result": value}
+        result_dict = retrieve_chunk_storage(
+            self.cols.state_backend_chunks,
+            build_chunk_key(
+                invocation_id=invocation_id, prefix=ChunkPrefix.RESULT.value
+            ),
+            doc,
+        )
+        assert isinstance(result_dict, dict)
+        return result_dict[ChunkPrefix.RESULT.value]
 
-    def _set_result(self, invocation_id: str, result: Result) -> None:
-        """Sets the result of an invocation by ID."""
+    def _set_result(
+        self, invocation_id: "InvocationId", serialized_result: str
+    ) -> None:
+        """Store result, chunking if it exceeds BSON limits."""
+        # Wrap in fake sub-document to use unified storage API
+        result_storage = prepare_chunk_storage(
+            self.cols.state_backend_chunks,
+            build_chunk_key(
+                invocation_id=invocation_id, prefix=ChunkPrefix.RESULT.value
+            ),
+            {ChunkPrefix.RESULT.value: serialized_result},
+            self.conf.chunk_threshold,
+        )
         self.cols.state_backend_results.insert_one(
-            {
-                "invocation_id": invocation_id,
-                "result_data": self.app.serializer.serialize(result),
-            }
+            {"invocation_id": invocation_id, **result_storage}
         )
 
-    def _get_exception(self, invocation_id: str) -> Exception:
-        """Retrieves the exception of an invocation by ID."""
+    def _get_exception(self, invocation_id: "InvocationId") -> str:
+        """Retrieve exception, decompressing from chunks if needed."""
         doc = self.cols.state_backend_exceptions.find_one(
             {"invocation_id": invocation_id}
         )
-        if doc:
-            return self.deserialize_exception(doc["exception_data"])
-        raise KeyError(f"Exception for invocation {invocation_id} not found")
+        if not doc:
+            raise KeyError(f"Exception for invocation {invocation_id} not found")
+        # Unwrap from fake sub-document {"exception": value}
+        exc_dict = retrieve_chunk_storage(
+            self.cols.state_backend_chunks,
+            build_chunk_key(
+                invocation_id=invocation_id, prefix=ChunkPrefix.EXCEPTION.value
+            ),
+            doc,
+        )
+        assert isinstance(exc_dict, dict)
+        return exc_dict[ChunkPrefix.EXCEPTION.value]
 
-    def _set_exception(self, invocation_id: str, exception: Exception) -> None:
-        """Sets the raised exception by invocation ID."""
+    def _set_exception(
+        self, invocation_id: "InvocationId", serialized_exception: str
+    ) -> None:
+        """Store exception, chunking if it exceeds BSON limits."""
+        # Wrap in fake sub-document to use unified storage API
+        exc_storage = prepare_chunk_storage(
+            self.cols.state_backend_chunks,
+            build_chunk_key(
+                invocation_id=invocation_id, prefix=ChunkPrefix.EXCEPTION.value
+            ),
+            {ChunkPrefix.EXCEPTION.value: serialized_exception},
+            self.conf.chunk_threshold,
+        )
         self.cols.state_backend_exceptions.insert_one(
-            {
-                "invocation_id": invocation_id,
-                "exception_data": self.serialize_exception(exception),
-            }
+            {"invocation_id": invocation_id, **exc_storage}
         )
 
     def set_workflow_data(
         self, workflow_identity: "WorkflowIdentity", key: str, value: Any
     ) -> None:
         """Set workflow data."""
-        serialized_value = self.app.serializer.serialize(value)
+        serialized_value = self.app.client_data_store.serialize(value)
         self.cols.state_backend_workflow_data.upsert_document(
-            {"workflow_id": workflow_identity.workflow_invocation_id, "data_key": key},
+            {"workflow_id": workflow_identity.workflow_id, "data_key": key},
             {
-                "workflow_id": workflow_identity.workflow_invocation_id,
+                "workflow_id": workflow_identity.workflow_id,
                 "data_key": key,
                 "data_value": serialized_value,
             },
@@ -299,31 +359,48 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
     ) -> Any:
         """Get workflow data."""
         doc = self.cols.state_backend_workflow_data.find_one(
-            {"workflow_id": workflow_identity.workflow_invocation_id, "data_key": key}
+            {"workflow_id": workflow_identity.workflow_id, "data_key": key}
         )
         if doc:
-            return self.app.serializer.deserialize(doc["data_value"])
+            return self.app.client_data_store.deserialize(doc["data_value"])
         return default
 
-    def get_all_workflow_types(self) -> Iterator[str]:
+    def get_all_workflow_types(self) -> Iterator["TaskId"]:
         """Retrieve all workflow types."""
-        types = self.cols.state_backend_workflows.distinct("workflow_type")
-        yield from types
+        types = self.cols.state_backend_workflows.distinct("workflow_type_key")
+        for workflow_type in types:
+            yield TaskId.from_key(workflow_type)
 
     def get_all_workflow_runs(self) -> Iterator["WorkflowIdentity"]:
         """Retrieve all stored workflows."""
         docs = self.cols.state_backend_workflows.find({})
         for doc in docs:
-            yield WorkflowIdentity.from_json(doc["workflow_json"])
+            yield WorkflowIdentity(
+                workflow_id=InvocationId(doc["workflow_id"]),
+                workflow_type=TaskId.from_key(doc["workflow_type_key"]),
+                parent_workflow_id=InvocationId(doc["parent_workflow_id"])
+                if doc["parent_workflow_id"]
+                else None,
+            )
 
-    def get_workflow_runs(self, workflow_type: str) -> Iterator["WorkflowIdentity"]:
+    def get_workflow_runs(
+        self, workflow_type: "TaskId"
+    ) -> Iterator["WorkflowIdentity"]:
         """Retrieve workflow runs for a specific workflow type."""
-        docs = self.cols.state_backend_workflows.find({"workflow_type": workflow_type})
+        docs = self.cols.state_backend_workflows.find(
+            {"workflow_type_key": workflow_type.key}
+        )
         for doc in docs:
-            yield WorkflowIdentity.from_json(doc["workflow_json"])
+            yield WorkflowIdentity(
+                workflow_id=InvocationId(doc["workflow_id"]),
+                workflow_type=TaskId.from_key(doc["workflow_type_key"]),
+                parent_workflow_id=InvocationId(doc["parent_workflow_id"])
+                if doc["parent_workflow_id"]
+                else None,
+            )
 
     def store_workflow_sub_invocation(
-        self, parent_workflow_id: str, sub_invocation_id: str
+        self, parent_workflow_id: "InvocationId", sub_invocation_id: "InvocationId"
     ) -> None:
         """Store workflow sub-invocation relationship."""
         self.cols.state_backend_workflow_sub_invocations.insert_or_ignore(
@@ -333,13 +410,15 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
             }
         )
 
-    def get_workflow_sub_invocations(self, workflow_id: str) -> Iterator[str]:
+    def get_workflow_sub_invocations(
+        self, workflow_id: "InvocationId"
+    ) -> Iterator["InvocationId"]:
         """Get workflow sub-invocations."""
         docs = self.cols.state_backend_workflow_sub_invocations.find(
             {"parent_workflow_id": workflow_id}
         )
         for doc in docs:
-            yield doc["sub_invocation_id"]
+            yield InvocationId(doc["sub_invocation_id"])
 
     def _store_runner_context(self, runner_context: "RunnerContext") -> None:
         """
@@ -383,5 +462,5 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
 
     def purge(self) -> None:
         """Clear all state backend data including chunked storage."""
-        purge_chunked(self.cols.state_backend_chunks)
+        self.cols.state_backend_chunks.delete_many({})
         self.cols.purge_all()

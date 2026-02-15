@@ -45,29 +45,6 @@ class OrchestratorCollections(MongoCollections):
         return self.instantiate_retriable_coll(spec)
 
     @cached_property
-    def orchestrator_cycle_calls(self) -> "RetryableCollection":
-        spec = CollectionSpec(
-            name="orchestrator_cycle_calls",
-            indexes=[
-                IndexModel([("call_id", ASCENDING)], unique=True),
-            ],
-        )
-        return self.instantiate_retriable_coll(spec)
-
-    @cached_property
-    def orchestrator_cycle_edges(self) -> "RetryableCollection":
-        spec = CollectionSpec(
-            name="orchestrator_cycle_edges",
-            indexes=[
-                IndexModel(
-                    [("caller_id", ASCENDING), ("callee_id", ASCENDING)], unique=True
-                ),
-                IndexModel([("callee_id", ASCENDING)]),
-            ],
-        )
-        return self.instantiate_retriable_coll(spec)
-
-    @cached_property
     def orchestrator_blocking_edges(self) -> "RetryableCollection":
         spec = CollectionSpec(
             name="orchestrator_blocking_edges",

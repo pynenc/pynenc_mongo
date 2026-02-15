@@ -103,5 +103,8 @@ class ConfigMongo(ConfigPynencBase):
     retry_indefinitely = ConfigField(False)
 
     # Chunk threshold - documents larger than this will be compressed and chunked
+    # This value controls both:
+    # 1. When to decide data needs chunking (if encoded size > threshold)
+    # 2. Maximum size of each chunk when splitting large data
     # Default 15MB to stay safely under MongoDB's 16MB BSON limit
     chunk_threshold = ConfigField(15 * 1024 * 1024)
