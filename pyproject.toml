@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "pynenc>=0.1.0rc101.dev149",
+    "pynenc>=0.1.0rc101.dev150",
     "pymongo>=3.12.2,<3.13",
 ]
 
@@ -59,10 +59,10 @@ dev = [
     "testcontainers[mongodb]>=4.13.0",
 ]
 tests = [
-    "pynenc[tests]>=0.1.0rc101.dev149",
+    "pynenc[tests]>=0.1.0rc101.dev150",
 ]
 monitor = [
-    "pynenc[monitor]>=0.1.0rc101.dev149",
+    "pynenc[monitor]>=0.1.0rc101.dev150",
 ]
 docs = [
     "sphinx>=7.0",
