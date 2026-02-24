@@ -138,7 +138,18 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         if not doc:
             return None
 
-        # Retrieve arguments (inline or from chunks)
+        # Retrieve arguments (inline or from chunks).
+        # "arguments" absent means the document was created by an older schema version
+        # that pre-dates chunk storage. insert_or_ignore silently skips re-inserting, so
+        # stale documents are never updated. Running with empty args would cause silent
+        # data corruption, so we raise a clear error for operators to investigate.
+        if "arguments" not in doc:
+            doc_keys = [k for k in doc if k != "_id"]
+            raise KeyError(
+                f"Invocation {invocation_id} document is missing the 'arguments' field. "
+                f"This indicates a schema mismatch: the document was likely written by an "
+                f"older pynenc_mongo version. Present keys: {doc_keys}"
+            )
         serialized_arguments = retrieve_chunk_storage(
             self.cols.state_backend_chunks,
             build_chunk_key(invocation_id=invocation_id, prefix=ChunkPrefix.ARGS.value),

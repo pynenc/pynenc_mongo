@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "pynenc>=0.1.0rc101.dev151",
+    "pynenc>=0.1.0rc101.dev156",
     "pymongo>=3.12.2,<3.13",
 ]
 
