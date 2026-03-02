@@ -431,6 +431,24 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         for doc in docs:
             yield InvocationId(doc["sub_invocation_id"])
 
+    def get_child_invocations(
+        self, parent_invocation_id: "InvocationId"
+    ) -> Iterator["InvocationId"]:
+        """
+        Return IDs of all invocations directly spawned by the given parent.
+
+        Queries the invocations collection using the indexed ``parent_invocation_id``
+        field for efficient family-tree traversal.
+
+        :param parent_invocation_id: The invocation ID to find children for.
+        :return: Iterator of child invocation IDs (may be empty).
+        """
+        docs = self.cols.state_backend_invocations.find(
+            {"parent_invocation_id": parent_invocation_id}
+        )
+        for doc in docs:
+            yield InvocationId(doc["invocation_id"])
+
     def _store_runner_context(self, runner_context: "RunnerContext") -> None:
         """
         Store a runner context in MongoDB.

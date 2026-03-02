@@ -42,6 +42,7 @@ class StateBackendCollections(MongoCollections):
             name="state_backend_invocations",
             indexes=[
                 IndexModel([("invocation_id", ASCENDING)], unique=True),
+                IndexModel([("parent_invocation_id", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)
