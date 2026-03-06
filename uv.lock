@@ -1118,8 +1118,8 @@ docs = [
     { name = "sphinx-design", specifier = ">=0.5.0" },
     { name = "sphinx-inline-tabs", specifier = ">=2023.4.21" },
 ]
-monitor = [{ name = "pynenc", extras = ["monitor"], specifier = ">=0.1.0rc101.dev151", index = "https://test.pypi.org/simple/" }]
-tests = [{ name = "pynenc", extras = ["tests"], specifier = ">=0.1.0rc101.dev151", index = "https://test.pypi.org/simple/" }]
+monitor = [{ name = "pynenc", extras = ["monitor"], specifier = ">=0.1.0rc101.dev166", index = "https://test.pypi.org/simple/" }]
+tests = [{ name = "pynenc", extras = ["tests"], specifier = ">=0.1.0rc101.dev166", index = "https://test.pypi.org/simple/" }]
 
 [[package]]
 name = "pytest"
