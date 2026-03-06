@@ -194,11 +194,21 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
                 )
 
     def _get_history(self, invocation_id: "InvocationId") -> list["InvocationHistory"]:
-        """Retrieves the history of an invocation ordered by timestamp."""
+        """
+        Retrieves the history of an invocation ordered by timestamp.
+
+        MongoDB (and mongomock) only sort datetimes to millisecond precision, so
+        if multiple records share the same millisecond, their order may be wrong.
+        We re-sort in Python for full microsecond precision, but keep the DB sort for efficiency.
+        """
         docs = self.cols.state_backend_history.find(
             {"invocation_id": invocation_id}
         ).sort("history_timestamp", ASCENDING)
-        return [InvocationHistory.from_json(doc["history_json"]) for doc in docs]
+        histories = [InvocationHistory.from_json(doc["history_json"]) for doc in docs]
+        return sorted(
+            histories,
+            key=lambda h: h.status_record.timestamp,
+        )
 
     def iter_invocations_in_timerange(
         self,
@@ -488,6 +498,48 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         for doc in docs:
             contexts.append(RunnerContext.from_json(doc["context_json"]))
         return contexts
+
+    def get_matching_runner_contexts(
+        self, partial_id: str
+    ) -> Iterator["RunnerContext"]:
+        """
+        Search runner contexts by partial ID match.
+
+        Performs a regex search on runner_id for flexible matching.
+
+        :param partial_id: Partial ID string to match (case-sensitive)
+        :return: Iterator of matching RunnerContext objects
+        """
+        docs = self.cols.state_backend_runner_contexts.find(
+            {"runner_id": {"$regex": partial_id}}
+        )
+        for doc in docs:
+            yield RunnerContext.from_json(doc["context_json"])
+
+    def get_invocation_ids_by_workflow(
+        self,
+        workflow_id: str | None = None,
+        workflow_type_key: str | None = None,
+    ) -> Iterator["InvocationId"]:
+        """
+        Retrieve invocation IDs filtered by workflow criteria.
+
+        Returns invocations matching the specified workflow filters.
+        At least one filter should be provided.
+
+        :param workflow_id: Optional workflow ID to filter by
+        :param workflow_type_key: Optional workflow type key to filter by
+        :return: Iterator of matching InvocationId objects
+        """
+        query_filter: dict[str, str] = {}
+        if workflow_id:
+            query_filter["workflow_id"] = workflow_id
+        if workflow_type_key:
+            query_filter["workflow_type_key"] = workflow_type_key
+
+        docs = self.cols.state_backend_invocations.find(query_filter)
+        for doc in docs:
+            yield InvocationId(doc["invocation_id"])
 
     def purge(self) -> None:
         """Clear all state backend data including chunked storage."""
