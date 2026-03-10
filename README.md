@@ -1,93 +1,161 @@
-# Pynenc MongoDB Plugin
+<p align="center">
+  <img src="https://pynenc.org/assets/img/pynenc_logo.png" alt="Pynenc" width="300">
+</p>
+<h1 align="center">Pynenc MongoDB Plugin</h1>
+<p align="center">
+    <em>Full-stack MongoDB backend for Pynenc distributed task orchestration</em>
+</p>
+<p align="center">
+    <a href="https://pypi.org/project/pynenc-mongo" target="_blank">
+        <img src="https://img.shields.io/pypi/v/pynenc-mongo?color=%2334D058&label=pypi%20package" alt="Package version">
+    </a>
+    <a href="https://pypi.org/project/pynenc-mongo" target="_blank">
+        <img src="https://img.shields.io/pypi/pyversions/pynenc-mongo.svg?color=%2334D058" alt="Supported Python versions">
+    </a>
+    <a href="https://github.com/pynenc/pynenc-mongodb/commits/main">
+        <img src="https://img.shields.io/github/last-commit/pynenc/pynenc-mongodb" alt="GitHub last commit">
+    </a>
+    <a href="https://github.com/pynenc/pynenc-mongodb/blob/main/LICENSE">
+        <img src="https://img.shields.io/github/license/pynenc/pynenc-mongodb" alt="GitHub license">
+    </a>
+</p>
 
-[![CI](https://github.com/pynenc/pynenc-mongodb/actions/workflows/ci.yml/badge.svg)](https://github.com/pynenc/pynenc-mongodb/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/pynenc/pynenc-mongodb/branch/main/graph/badge.svg)](https://codecov.io/gh/pynenc/pynenc-mongodb)
-[![PyPI version](https://badge.fury.io/py/pynenc-mongodb.svg)](https://badge.fury.io/py/pynenc-mongodb)
-[![Python versions](https://img.shields.io/pypi/pyversions/pynenc-mongodb.svg)](https://pypi.org/project/pynenc-mongodb/)
+---
 
-MongoDB state backend plugin for [Pynenc](https://github.com/pynenc/pynenc), providing distributed task state management using MongoDB as the storage backend.
+**Documentation**: <a href="https://pynenc-mongodb.readthedocs.io" target="_blank">https://pynenc-mongodb.readthedocs.io</a>
 
-## Features
+**Pynenc Documentation**: <a href="https://docs.pynenc.org" target="_blank">https://docs.pynenc.org</a>
 
-- 🚀 **High Performance**: Optimized MongoDB operations with connection pooling
-- 🔒 **Distributed Locking**: MongoDB-based distributed locks for task coordination
-- 🎯 **Type Safe**: Full type hints and mypy compatibility
-- 🧪 **Well Tested**: Comprehensive test suite with multiple MongoDB versions
-- 📊 **Production Ready**: Battle-tested configuration options and monitoring
+**Source Code**: <a href="https://github.com/pynenc/pynenc-mongodb" target="_blank">https://github.com/pynenc/pynenc-mongodb</a>
+
+---
+
+The `pynenc-mongo` plugin provides all five Pynenc backend components running on MongoDB, with automatic document chunking for large payloads and a pseudo-atomic ownership protocol for distributed invocation management.
+
+## Components
+
+| Component             | Class                  | Role                                                               |
+| --------------------- | ---------------------- | ------------------------------------------------------------------ |
+| **Orchestrator**      | `MongoOrchestrator`    | Invocation lifecycle, ownership consensus & blocking control       |
+| **Broker**            | `MongoBroker`          | FIFO message queue using MongoDB collections                       |
+| **State Backend**     | `MongoStateBackend`    | Persistent state, results & exceptions with auto document chunking |
+| **Client Data Store** | `MongoClientDataStore` | Argument caching with compression for large payloads               |
+| **Trigger**           | `MongoTrigger`         | Event-driven & cron-based scheduling with distributed claims       |
+
+## Installation
+
+```bash
+pip install pynenc-mongo
+```
+
+The plugin registers itself automatically via Python entry points when installed.
 
 ## Quick Start
 
-### Installation
-
-```bash
-pip install pynenc-mongodb
-```
-
-### Basic Usage
-
 ```python
-from pynenc import Pynenc
-from pynenc_mongodb import MongoStateBackend
+from pynenc import PynencBuilder
 
-# Create Pynenc app with MongoDB backend
-app = Pynenc().with_state_backend(
-    MongoStateBackend.from_uri("mongodb://localhost:27017/pynenc")
+app = (
+    PynencBuilder()
+    .app_id("my_app")
+    .mongo(url="mongodb://localhost:27017/pynenc")  # all components on MongoDB
+    .process_runner()
+    .build()
 )
 
 @app.task
-def my_task(x: int, y: int) -> int:
+def add(x: int, y: int) -> int:
     return x + y
 
-# Use your tasks as normal
-result = my_task(1, 2)
+result = add(1, 2).result  # 3
+```
+
+`.mongo()` registers every component at once. Start a runner with:
+
+```bash
+pynenc --app=tasks.app runner start
 ```
 
 ## Configuration
 
-### Connection Configuration
+### Builder Parameters
 
 ```python
-from pynenc_mongodb import MongoStateBackend, ConfigMongoDB
-
-config = ConfigMongoDB(
-    uri="mongodb://localhost:27017",
-    database_name="my_pynenc_db",
-    max_pool_size=100,
-    write_concern_w="majority",
-    read_preference="primaryPreferred"
+# URL-based (recommended)
+app = (
+    PynencBuilder()
+    .app_id("my_app")
+    .mongo(url="mongodb://localhost:27017/pynenc")
+    .multi_thread_runner(min_threads=2, max_threads=8)
+    .build()
 )
 
-backend = MongoStateBackend(config)
+# Individual parameters
+app = (
+    PynencBuilder()
+    .app_id("my_app")
+    .mongo(
+        host="localhost",
+        port=27017,
+        db="pynenc",
+        username="admin",
+        password="secret",
+        auth_source="admin",
+    )
+    .process_runner()
+    .build()
+)
+```
+
+### Component-Specific Configuration
+
+```python
+app = (
+    PynencBuilder()
+    .app_id("my_app")
+    .mongo(url="mongodb://localhost:27017/pynenc")
+    .mongo_client_data_store(
+        min_size_to_cache=1024,          # cache arguments > 1KB
+        local_cache_size=1000,           # local LRU cache entries
+        max_size_to_cache=16777216,      # max 16MB per document
+    )
+    .mongo_trigger(
+        scheduler_interval_seconds=60,
+        enable_scheduler=True,
+    )
+    .build()
+)
 ```
 
 ### Environment Variables
 
-You can also configure via environment variables:
-
 ```bash
-export PYNENC_MONGODB_URI="mongodb://localhost:27017"
-export PYNENC_MONGODB_DATABASE="pynenc"
-export PYNENC_MONGODB_MAX_POOL_SIZE="100"
+PYNENC__MONGO__MONGO_URL="mongodb://localhost:27017/pynenc"
+# Or individual parameters:
+PYNENC__MONGO__MONGO_HOST="localhost"
+PYNENC__MONGO__MONGO_PORT=27017
+PYNENC__MONGO__MONGO_DB="pynenc"
 ```
 
-## Documentation
+### Connection URLs
 
-- [Configuration Guide](docs/configuration/index.md)
-- [Usage Examples](docs/usage/index.md)
-- [Migration Guide](docs/migration/index.md)
+```python
+.mongo(url="mongodb://localhost:27017/pynenc")                          # Standard
+.mongo(url="mongodb://user:pass@localhost:27017/pynenc?authSource=admin")  # With auth
+.mongo(url="mongodb+srv://cluster.example.net/pynenc")                  # Atlas SRV
+```
 
-## Development
+## Requirements
 
-### Setup
+- Python >= 3.11
+- Pynenc >= 0.1.0
+- pymongo >= 3.12.2
+- A running MongoDB server
 
-1. Clone the repository
-2. Install dependencies: `poetry install --with dev`
-3. Start MongoDB: `docker-compose -f docker/docker-compose.yml up -d`
-4. Run tests: `poetry run pytest`
+## Related Plugins
 
-### Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+- **[pynenc-redis](https://github.com/pynenc/pynenc-redis)**: Full-stack Redis backend
+- **[pynenc-rabbitmq](https://github.com/pynenc/pynenc-rabbitmq)**: RabbitMQ broker (pairs with MongoDB for state/orchestrator/triggers)
 
 ## License
 
