@@ -75,7 +75,21 @@ def app_combination_instance(
     components: AppComponents = request.param
     test_module, test_name = get_module_name(request)
     app_id = f"{test_module}.{test_name}"
-    app_instance_builder = app_instance_builder.app_id(app_id).logging_level("debug")
+
+    # Use unique database name per app_id to avoid test isolation issues
+    # Otherwise, all tests share "pynenc" database and purge() affects all of them
+    # Replace dots and colons with underscores to create valid MongoDB database names
+    db_name = (
+        app_id.replace(".", "_")
+        .replace(":", "_")
+        .replace("[", "")
+        .replace("]", "")
+        .replace("-", "")
+    )
+
+    app_instance_builder = (
+        app_instance_builder.app_id(app_id).logging_level("debug").mongo(db=db_name)
+    )
     app_instance_builder._config["serializer_cls"] = components.serializer.__name__
     app_instance_builder._config["runner_cls"] = components.runner.__name__
 
@@ -89,6 +103,7 @@ def app_combination_instance(
     monkeypatch.setenv("PYNENC__RUNNER_CLS", components.runner.__name__)
     monkeypatch.setenv("PYNENC__ORCHESTRATOR__CYCLE_CONTROL", "True")
     monkeypatch.setenv("PYNENC__MONGO_URL", app_instance_builder._config["mongo_url"])
+    monkeypatch.setenv("PYNENC__MONGO_DB", db_name)
     monkeypatch.setenv("PYNENC__PRINT_ARGUMENTS", "False")
 
     app_instance = app_instance_builder.build()
