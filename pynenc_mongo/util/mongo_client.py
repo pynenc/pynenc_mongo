@@ -155,8 +155,11 @@ class RetryableCollection:
             while True:
                 try:
                     return func(*args, **kwargs)
+                except DuplicateKeyError:
+                    raise
                 except (*RETRYABLE_EXCEPTIONS, OperationFailure) as e:
-                    # Only check error codes for exact OperationFailure (not subclasses like CursorNotFound)
+                    # Only retry exact OperationFailure with known transient codes;
+                    # subclasses in RETRYABLE_EXCEPTIONS (e.g. CursorNotFound) are always retried.
                     if (
                         type(e) is OperationFailure
                         and e.code not in RETRYABLE_OPERATION_FAILURE_CODES

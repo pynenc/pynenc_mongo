@@ -313,7 +313,6 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         self, invocation_id: "InvocationId", serialized_result: str
     ) -> None:
         """Store result, chunking if it exceeds BSON limits."""
-        # Wrap in fake sub-document to use unified storage API
         result_storage = prepare_chunk_storage(
             self.cols.state_backend_chunks,
             build_chunk_key(
@@ -322,9 +321,15 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
             {ChunkPrefix.RESULT.value: serialized_result},
             self.conf.chunk_threshold,
         )
-        self.cols.state_backend_results.insert_one(
-            {"invocation_id": invocation_id, **result_storage}
+        outcome = self.cols.state_backend_results.upsert_document(
+            {"invocation_id": invocation_id},
+            {"invocation_id": invocation_id, **result_storage},
         )
+        if not outcome.upserted_id and outcome.matched_count > 0:
+            self.app.logger.warning(
+                f"Result for invocation {invocation_id} already existed — "
+                "concurrent runner stored a duplicate result (upsert overwrote)"
+            )
 
     def _get_exception(self, invocation_id: "InvocationId") -> str:
         """Retrieve exception, decompressing from chunks if needed."""
@@ -348,7 +353,6 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         self, invocation_id: "InvocationId", serialized_exception: str
     ) -> None:
         """Store exception, chunking if it exceeds BSON limits."""
-        # Wrap in fake sub-document to use unified storage API
         exc_storage = prepare_chunk_storage(
             self.cols.state_backend_chunks,
             build_chunk_key(
@@ -357,9 +361,15 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
             {ChunkPrefix.EXCEPTION.value: serialized_exception},
             self.conf.chunk_threshold,
         )
-        self.cols.state_backend_exceptions.insert_one(
-            {"invocation_id": invocation_id, **exc_storage}
+        outcome = self.cols.state_backend_exceptions.upsert_document(
+            {"invocation_id": invocation_id},
+            {"invocation_id": invocation_id, **exc_storage},
         )
+        if not outcome.upserted_id and outcome.matched_count > 0:
+            self.app.logger.warning(
+                f"Exception for invocation {invocation_id} already existed — "
+                "concurrent runner stored a duplicate exception (upsert overwrote)"
+            )
 
     def set_workflow_data(
         self, workflow_identity: "WorkflowIdentity", key: str, value: Any

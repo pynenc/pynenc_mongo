@@ -9,6 +9,7 @@ from pymongo.errors import (
     AutoReconnect,
     ConnectionFailure,
     CursorNotFound,
+    DuplicateKeyError,
     NetworkTimeout,
     NotPrimaryError,
     OperationFailure,
@@ -126,3 +127,20 @@ def test_does_not_retry_on_non_retryable_operation_failure(
             retryable_collection.find()
         assert call_count == 1, "Should not retry on non-retryable code"
         assert exc_info.value.code == 2
+
+
+def test_does_not_retry_on_duplicate_key_error(
+    retryable_collection: RetryableCollection,
+) -> None:
+    """Test that DuplicateKeyError raises immediately without retries."""
+    call_count = 0
+
+    def mock_insert(*args: Any, **kwargs: Any) -> None:
+        nonlocal call_count
+        call_count += 1
+        raise DuplicateKeyError("duplicate key", code=11000)
+
+    with patch.object(retryable_collection._collection, "insert_one", mock_insert):
+        with pytest.raises(DuplicateKeyError):
+            retryable_collection.insert_one({"test": "data"})
+        assert call_count == 1, "Should not retry on DuplicateKeyError"
