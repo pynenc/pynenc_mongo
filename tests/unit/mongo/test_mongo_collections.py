@@ -52,7 +52,7 @@ def test_collection_specs() -> None:
         # prefix_arg = cls.__init__.__code__.co_varnames[2]  # Assuming prefix is 3rd arg after self, conf
         dummy_conf = ConfigMongo({}, None)
         instance = cls.__new__(cls)  # type: ignore
-        cls.__init__(instance, dummy_conf)  # type: ignore
+        cls.__init__(instance, dummy_conf, app_id="test_app")  # type: ignore
         prefix_value = instance.prefix
 
         specs = extract_collection_specs(cls)

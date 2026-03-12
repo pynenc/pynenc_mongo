@@ -70,26 +70,15 @@ def build_test_combinations() -> list[AppComponents]:
 def app_combination_instance(
     request: "FixtureRequest",
     app_instance_builder: "PynencBuilder",
+    mongo_url: str,
     monkeypatch: MonkeyPatch,
 ) -> "Pynenc":
     components: AppComponents = request.param
     test_module, test_name = get_module_name(request)
     app_id = f"{test_module}.{test_name}"
 
-    # Use unique database name per app_id to avoid test isolation issues
-    # Otherwise, all tests share "pynenc" database and purge() affects all of them
-    # Replace dots and colons with underscores to create valid MongoDB database names
-    db_name = (
-        app_id.replace(".", "_")
-        .replace(":", "_")
-        .replace("[", "")
-        .replace("]", "")
-        .replace("-", "")
-    )
-
-    app_instance_builder = (
-        app_instance_builder.app_id(app_id).logging_level("debug").mongo(db=db_name)
-    )
+    # Collections are isolated by app_id prefix, so all tests can share the same database
+    app_instance_builder = app_instance_builder.app_id(app_id).logging_level("debug")
     app_instance_builder._config["serializer_cls"] = components.serializer.__name__
     app_instance_builder._config["runner_cls"] = components.runner.__name__
 
@@ -102,8 +91,7 @@ def app_combination_instance(
     monkeypatch.setenv("PYNENC__SERIALIZER_CLS", components.serializer.__name__)
     monkeypatch.setenv("PYNENC__RUNNER_CLS", components.runner.__name__)
     monkeypatch.setenv("PYNENC__ORCHESTRATOR__CYCLE_CONTROL", "True")
-    monkeypatch.setenv("PYNENC__MONGO_URL", app_instance_builder._config["mongo_url"])
-    monkeypatch.setenv("PYNENC__MONGO_DB", db_name)
+    monkeypatch.setenv("PYNENC__MONGO_URL", mongo_url)
     monkeypatch.setenv("PYNENC__PRINT_ARGUMENTS", "False")
 
     app_instance = app_instance_builder.build()

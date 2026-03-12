@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 class ArgCacheCollections(MongoCollections):
     """MongoDB collections for the argument cache system."""
 
-    def __init__(self, conf: "ConfigMongo"):
-        super().__init__(conf, prefix="arg")
+    def __init__(self, conf: "ConfigMongo", app_id: str):
+        super().__init__(conf, prefix="arg", app_id=app_id)
 
     @cached_property
     def arg_cache(self) -> "RetryableCollection":
@@ -65,7 +65,7 @@ class MongoClientDataStore(BaseClientDataStore):
 
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
-        self.cols = ArgCacheCollections(self.conf)
+        self.cols = ArgCacheCollections(self.conf, app_id=self.app.app_id)
 
     @cached_property
     def conf(self) -> ConfigClientDataStoreMongo:

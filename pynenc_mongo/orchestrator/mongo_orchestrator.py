@@ -80,7 +80,7 @@ class MongoBlockingControl(BaseBlockingControl):
             },
             {
                 "$lookup": {
-                    "from": "orchestrator_invocations",
+                    "from": self.cols.orchestrator_invocations.spec.name,
                     "localField": "waited_id",
                     "foreignField": "invocation_id",
                     "as": "invocation",
@@ -122,7 +122,7 @@ class MongoOrchestrator(BaseOrchestrator):
 
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
-        self.cols = OrchestratorCollections(self.conf)
+        self.cols = OrchestratorCollections(self.conf, app_id=self.app.app_id)
         self._blocking_control = MongoBlockingControl(app, self.cols)
 
     @cached_property
@@ -176,7 +176,7 @@ class MongoOrchestrator(BaseOrchestrator):
                 {"$match": query},
                 {
                     "$lookup": {
-                        "from": "orchestrator_invocation_args",
+                        "from": self.cols.orchestrator_invocation_args.spec.name,
                         "localField": "invocation_id",
                         "foreignField": "invocation_id",
                         "as": "args",
@@ -350,7 +350,7 @@ class MongoOrchestrator(BaseOrchestrator):
                     previous_status_record=prev_status_record,
                     expected_status_record=new_record,
                     actual_status_record=self.get_invocation_status_record(
-                        invocation_id
+                        InvocationId(invocation_id)
                     ),
                 )
 
@@ -440,7 +440,7 @@ class MongoOrchestrator(BaseOrchestrator):
     def get_invocation_status_record(
         self, invocation_id: "InvocationId"
     ) -> InvocationStatusRecord:
-        """Get the current status of an invocation by ID, handling pending timeouts."""
+        """Get the current status of an invocation by ID."""
         doc = self.cols.orchestrator_invocations.find_one(
             {"invocation_id": invocation_id}
         )

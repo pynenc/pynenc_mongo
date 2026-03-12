@@ -10,11 +10,15 @@ if TYPE_CHECKING:
     from pynenc_mongo.util.mongo_client import RetryableCollection
 
 
+# Suffix used for app_info collections, used by discover_app_infos to scan all apps
+APP_INFO_COLLECTION_SUFFIX = "state_backend_app_info"
+
+
 class StateBackendCollections(MongoCollections):
     """Collections specific to MongoStateBackend with prefix state_backend_."""
 
-    def __init__(self, conf: "ConfigMongo"):
-        super().__init__(conf, prefix="state_backend_")
+    def __init__(self, conf: "ConfigMongo", app_id: str):
+        super().__init__(conf, prefix="state_backend_", app_id=app_id)
 
     @cached_property
     def state_backend_results(self) -> "RetryableCollection":
@@ -82,7 +86,7 @@ class StateBackendCollections(MongoCollections):
     @cached_property
     def state_backend_app_info(self) -> "RetryableCollection":
         spec = CollectionSpec(
-            name="state_backend_app_info",
+            name=APP_INFO_COLLECTION_SUFFIX,
             indexes=[
                 IndexModel([("app_id", ASCENDING)], unique=True),
             ],

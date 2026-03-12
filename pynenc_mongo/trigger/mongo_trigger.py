@@ -31,7 +31,7 @@ class MongoTrigger(BaseTrigger):
 
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
-        self.cols = TriggerCollections(self.conf)
+        self.cols = TriggerCollections(self.conf, app_id=self.app.app_id)
 
     @cached_property
     def conf(self) -> ConfigTriggerMongo:

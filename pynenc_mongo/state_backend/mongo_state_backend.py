@@ -20,6 +20,7 @@ from pynenc.workflow import WorkflowIdentity
 
 from pynenc_mongo.conf.config_state_backend import ConfigStateBackendMongo
 from pynenc_mongo.state_backend.mongo_state_backend_collections import (
+    APP_INFO_COLLECTION_SUFFIX,
     StateBackendCollections,
 )
 from pynenc_mongo.util.mongo_chunk_data import (
@@ -27,6 +28,7 @@ from pynenc_mongo.util.mongo_chunk_data import (
     prepare_chunk_storage,
     retrieve_chunk_storage,
 )
+from pynenc_mongo.util.mongo_client import PynencMongoClient
 
 if TYPE_CHECKING:
     from pynenc.app import Pynenc
@@ -57,7 +59,7 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
 
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
-        self.cols = StateBackendCollections(self.conf)
+        self.cols = StateBackendCollections(self.conf, app_id=self.app.app_id)
 
     @cached_property
     def conf(self) -> ConfigStateBackendMongo:
@@ -82,13 +84,14 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
 
     @staticmethod
     def discover_app_infos() -> dict[str, "AppInfo"]:
-        """Retrieve all app information registered in this state backend."""
+        """Retrieve all app information by scanning all app-prefixed collections."""
         default_conf = ConfigStateBackendMongo()
-        cols = StateBackendCollections(default_conf)
-        apps = {}
-        docs = cols.state_backend_app_info.find({})
-        for doc in docs:
-            apps[doc["app_id"]] = AppInfo.from_json(doc["app_info_json"])
+        client = PynencMongoClient.get_instance(default_conf)
+        apps: dict[str, AppInfo] = {}
+        for coll_name in client.list_collection_names():
+            if coll_name.endswith(APP_INFO_COLLECTION_SUFFIX):
+                for doc in client.db[coll_name].find({}):
+                    apps[doc["app_id"]] = AppInfo.from_json(doc["app_info_json"])
         return apps
 
     def store_workflow_run(self, workflow_identity: "WorkflowIdentity") -> None:

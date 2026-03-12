@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import threading
 import time
@@ -7,6 +8,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from bson.objectid import ObjectId
+from pymongo import IndexModel
 from pymongo import MongoClient as PyMongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
@@ -25,6 +27,10 @@ from pynenc_mongo.conf.config_mongo import ConfigMongo
 
 if TYPE_CHECKING:
     from pynenc_mongo.util.mongo_collections import CollectionSpec
+
+# MongoDB 3.6 limits the fully qualified index namespace
+# ("db.collection.$index_name") to 127 bytes.
+_MAX_INDEX_NS_BYTES = 127
 
 logger = logging.getLogger(__name__)
 
@@ -235,9 +241,18 @@ class PynencMongoClient:
                 cls._instances[key] = cls(conf)
             return cls._instances[key]
 
+    @property
+    def db(self) -> Database:
+        """Return the configured database."""
+        return self._client[self.conf.mongo_db]
+
+    def list_collection_names(self) -> list[str]:
+        """List all collection names in the configured database."""
+        return self.db.list_collection_names()
+
     def get_collection(self, spec: "CollectionSpec") -> RetryableCollection:
         """Returns a retryable collection proxy with stored spec."""
-        db: Database = self._client[self.conf.mongo_db]
+        db: Database = self.db
         collection_key = f"{self.conf.mongo_db}.{spec.name}"
 
         # Ensure indexes exist (only once per collection)
@@ -246,7 +261,10 @@ class PynencMongoClient:
                 if collection_key not in self._validated_collections:
                     collection = db[spec.name]
                     for index in spec.indexes:
-                        collection.create_indexes([index])
+                        safe = _shorten_index_if_needed(
+                            index, self.conf.mongo_db, spec.name
+                        )
+                        collection.create_indexes([safe])
                     self._validated_collections.add(collection_key)
 
         return RetryableCollection(
@@ -258,6 +276,31 @@ class PynencMongoClient:
             max_time=self.conf.retry_max_time,
             retry_indefinitely=self.conf.retry_indefinitely,
         )
+
+
+def _shorten_index_if_needed(
+    index: IndexModel, db_name: str, collection_name: str
+) -> IndexModel:
+    """Shorten index name if namespace would exceed MongoDB's byte limit.
+
+    MongoDB 3.6 limits fully qualified index namespaces
+    (``db.collection.$index_name``) to 127 bytes. When the auto-generated
+    name would exceed this, a deterministic hash-based name is substituted.
+
+    :param index: The original IndexModel
+    :param db_name: The database name
+    :param collection_name: The collection name
+    :return: The original index or a new IndexModel with a shortened name
+    """
+    idx_doc = index.document
+    idx_name = idx_doc.get("name", "")
+    ns = f"{db_name}.{collection_name}.${idx_name}"
+    if len(ns.encode("utf-8")) <= _MAX_INDEX_NS_BYTES:
+        return index
+    short_name = "idx_" + hashlib.sha256(idx_name.encode()).hexdigest()[:8]
+    kwargs = {k: v for k, v in idx_doc.items() if k not in ("key", "name")}
+    kwargs["name"] = short_name
+    return IndexModel(list(idx_doc["key"].items()), **kwargs)
 
 
 def get_conn_key(conf: "ConfigMongo") -> str:

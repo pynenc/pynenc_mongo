@@ -41,51 +41,48 @@ def mongo_container() -> "Generator[PatchedMongoDbContainer, None, None]":
         ) from e
 
 
-@pytest.fixture(scope="function")
-def app_instance_builder(
-    mongo_container: PatchedMongoDbContainer,
-) -> "Generator['PynencBuilder', None, None]":
+@pytest.fixture(scope="session")
+def mongo_url(mongo_container: PatchedMongoDbContainer) -> str:
     """
-    Fixture that provides a Pynenc app instance builder with a real Mongo backend.
+    Session-scoped MongoDB URL derived from the container.
 
-    Uses a session-scoped container for performance.
+    Computed once and reused by all tests, avoiding repeated port lookups.
 
     :param mongo_container: Session-scoped MongoDB container
-    :return: Generator yielding a PynencBuilder instance with Mongo backend
+    :return: MongoDB connection URL string
     """
-    mongo_url = (
+    return (
         f"mongodb://test:test@{mongo_container.get_container_host_ip()}:"
-        f"{mongo_container.get_exposed_port(27017)}/test?authSource=admin"
+        f"{mongo_container.get_exposed_port(27017)}/pynenc?authSource=admin"
     )
-    yield PynencBuilder().mongo(url=mongo_url)
+
+
+@pytest.fixture(scope="function")
+def app_instance_builder(
+    mongo_url: str,
+) -> "PynencBuilder":
+    """
+    Fixture that provides a fresh Pynenc app instance builder with Mongo backend.
+
+    The MongoDB URL is session-scoped (computed once), while the builder is
+    function-scoped so each test gets a clean builder to configure.
+
+    :param mongo_url: Session-scoped MongoDB connection URL
+    :return: PynencBuilder instance configured for Mongo
+    """
+    return PynencBuilder().mongo(url=mongo_url)
 
 
 @pytest.fixture(scope="function")
 def app_instance(
     app_instance_builder: "PynencBuilder",
-    mongo_container: PatchedMongoDbContainer,
 ) -> "Generator['Pynenc', None, None]":
     """
     Fixture that provides a Pynenc app instance built from the app_instance_builder.
 
     :param app_instance_builder: Fixture providing a PynencBuilder instance
-    :param mongo_container: MongoDB container for cleanup
     :return: Generator yielding a built Pynenc app instance
     """
     app = app_instance_builder.build()
-    # app.purge()
     yield app
-    app.purge()  # Clean up app data after each test
-
-    # # Clean up: drop all non-system databases after app is done
-    # mongo_url = (
-    #     f"mongodb://test:test@{mongo_container.get_container_host_ip()}:"
-    #     f"{mongo_container.get_exposed_port(27017)}/test?authSource=admin"
-    # )
-    # client = MongoClient(mongo_url)
-    # try:
-    #     for db_name in client.list_database_names():
-    #         if db_name not in ("admin", "local", "config"):
-    #             client.drop_database(db_name)
-    # finally:
-    #     client.close()
+    app.purge()

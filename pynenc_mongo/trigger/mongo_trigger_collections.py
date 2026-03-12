@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 class TriggerCollections(MongoCollections):
     """Collections specific to MongoTrigger with prefix trg_."""
 
-    def __init__(self, conf: "ConfigMongo"):
-        super().__init__(conf, prefix="trg_")
+    def __init__(self, conf: "ConfigMongo", app_id: str):
+        super().__init__(conf, prefix="trg_", app_id=app_id)
 
     @cached_property
     def trg_conditions(self) -> "RetryableCollection":

@@ -19,8 +19,8 @@ if TYPE_CHECKING:
 class BrokerCollections(MongoCollections):
     """MongoDB collections for the broker message queue."""
 
-    def __init__(self, conf: "ConfigMongo"):
-        super().__init__(conf, prefix="broker")
+    def __init__(self, conf: "ConfigMongo", app_id: str):
+        super().__init__(conf, prefix="broker", app_id=app_id)
 
     @cached_property
     def broker_message_queue(self) -> "RetryableCollection":
@@ -42,7 +42,7 @@ class MongoBroker(BaseBroker):
 
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
-        self.cols = BrokerCollections(self.conf)
+        self.cols = BrokerCollections(self.conf, app_id=self.app.app_id)
 
     @cached_property
     def conf(self) -> ConfigBrokerMongo:

@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 class OrchestratorCollections(MongoCollections):
     """Collections specific to MongoOrchestrator with prefix orchestrator_."""
 
-    def __init__(self, conf: "ConfigMongo"):
-        super().__init__(conf, prefix="orchestrator_")
+    def __init__(self, conf: "ConfigMongo", app_id: str):
+        super().__init__(conf, prefix="orchestrator_", app_id=app_id)
 
     @cached_property
     def orchestrator_invocations(self) -> "RetryableCollection":
