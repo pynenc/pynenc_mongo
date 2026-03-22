@@ -1,19 +1,17 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from functools import cached_property
-from time import sleep, time
+from time import time
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
-from pymongo import ReturnDocument
 from pynenc.exceptions import (
-    InvocationStatusError,
     InvocationStatusRaceConditionError,
 )
 from pynenc.identifiers.invocation_id import InvocationId
 from pynenc.invocation.status import (
     InvocationStatus,
     InvocationStatusRecord,
-    get_status_definition,
     status_record_transition,
 )
 from pynenc.orchestrator.atomic_service import ActiveRunnerInfo
@@ -155,7 +153,7 @@ class MongoOrchestrator(BaseOrchestrator):
                     "status_timestamp": status_record.timestamp,
                     "retry_count": 0,
                     "auto_purge_timestamp": None,
-                    "ownership_claims": [],
+                    "transition_lock": [],
                 }
             )
         return status_record
@@ -273,133 +271,133 @@ class MongoOrchestrator(BaseOrchestrator):
             is not None
         )
 
-    def _validate_ownership_acquisition(
-        self, invocation_id: str, runner_id: str
-    ) -> bool:
-        """
-        Validate ownership acquisition using time-based consensus.
+    def _make_claim(self) -> str:
+        """Create a lock claim string encoding a unique ID and timestamp."""
+        return f"{uuid4()}:{time()}"
 
-        This implements a pseudo-atomic ownership protocol:
-        1. Add runner_id to ownership_claims array
-        2. Wait for consensus period
-        3. Check if our runner_id is first in the array
+    def _parse_claim_timestamp(self, claim: str) -> float:
+        """Extract the timestamp from a lock claim string."""
+        parts = claim.rsplit(":", 1)
+        return float(parts[1]) if len(parts) == 2 else 0.0
 
-        :param invocation_id: ID of the invocation to claim
-        :param runner_id: ID of the worker attempting to claim ownership
-        :return: True if ownership successfully acquired, False otherwise
+    def _acquire_transition_lock(self, invocation_id: str) -> str | None:
         """
-        # Step 1: Push our runner_id to the claims array
+        Acquire an exclusive lock on the invocation document for a status transition.
+
+        Pushes a unique claim into the transition_lock array. If our claim is
+        first in the array, we hold the lock and may proceed to update the status.
+        Two concurrent pushes are both applied, but only one can be at index 0.
+
+        If the existing lock holder's claim is older than stale_lock_threshold_seconds,
+        it is treated as stale (owner crashed) and cleared before retrying.
+
+        :param invocation_id: ID of the invocation to lock
+        :return: The claim ID if lock acquired, None otherwise
+        """
+        claim_id = self._make_claim()
         self.cols.orchestrator_invocations.update_one(
-            {"invocation_id": invocation_id}, {"$push": {"ownership_claims": runner_id}}
+            {"invocation_id": invocation_id},
+            {"$push": {"transition_lock": claim_id}},
         )
-
-        # Step 2: Wait for consensus period
-        sleep(self.conf.ownership_consensus_wait_seconds)
-
-        # Step 3: Check if we won the race
         doc = self.cols.orchestrator_invocations.find_one(
-            {"invocation_id": invocation_id}
+            {"invocation_id": invocation_id}, {"transition_lock": 1}
         )
-
         if not doc:
             raise KeyError(f"Invocation ID {invocation_id} not found")
+        lock = doc.get("transition_lock", [])
+        if lock and lock[0] == claim_id:
+            return claim_id
 
-        ownership_claims = doc.get("ownership_claims", [])
+        # We lost the race. Check if the winner's claim is stale.
+        if lock:
+            holder_ts = self._parse_claim_timestamp(lock[0])
+            if time() - holder_ts > self.conf.stale_lock_threshold_seconds:
+                self.app.logger.warning(
+                    f"Clearing stale transition_lock on invocation:{invocation_id}"
+                )
+                self._release_transition_lock(invocation_id)
+        return None
 
-        # We win if we're first in the list
-        return ownership_claims and ownership_claims[0] == runner_id
-
-    def _release_ownership(self, invocation_id: str) -> None:
-        """
-        Release ownership by clearing the ownership_claims array.
-
-        :param invocation_id: ID of the invocation to release
-        """
+    def _release_transition_lock(self, invocation_id: str) -> None:
+        """Clear the transition_lock array after a status change."""
         self.cols.orchestrator_invocations.update_one(
-            {"invocation_id": invocation_id}, {"$set": {"ownership_claims": []}}
+            {"invocation_id": invocation_id}, {"$set": {"transition_lock": []}}
         )
 
     def _atomic_status_transition(
         self, invocation_id: str, status: InvocationStatus, runner_id: str | None = None
     ) -> InvocationStatusRecord:
-        """Set the status of an invocation by ID."""
-        doc = self.cols.orchestrator_invocations.find_one(
-            {"invocation_id": invocation_id}
-        )
-        if not doc:
-            raise KeyError(f"Invocation ID {invocation_id} not found")
-        prev_status_record = InvocationStatusRecord(
-            InvocationStatus(doc["status"]),
-            doc["status_runner_id"],
-            doc["status_timestamp"],
-        )
+        """
+        Validate and transition invocation status with array-push locking.
 
-        # Validate the transition
-        new_record = status_record_transition(prev_status_record, status, runner_id)
+        Uses a transition_lock array to guarantee mutual exclusion:
+        1. Push a unique claim ID into the transition_lock array
+        2. If our claim is first → we hold the lock
+        3. Read current status, validate transition, write new status
+        4. Clear the lock array
 
-        # Check ownership acquisition if needed: pseudo-atomic protocol
-        new_def = get_status_definition(status)
-        if new_def.acquires_ownership:
-            if not runner_id:
-                raise InvocationStatusError(
-                    f"Owner ID must be provided when transitioning to status {status}"
-                )
-            if not self._validate_ownership_acquisition(invocation_id, runner_id):
-                raise InvocationStatusRaceConditionError(
-                    invocation_id=invocation_id,
-                    previous_status_record=prev_status_record,
-                    expected_status_record=new_record,
-                    actual_status_record=self.get_invocation_status_record(
-                        InvocationId(invocation_id)
-                    ),
-                )
+        If we don't win the lock, raise InvocationStatusRaceConditionError
+        so the caller can retry or back off.
 
-        update_doc: dict = {
-            "status": new_record.status.value,
-            "status_runner_id": new_record.runner_id,
-            "status_timestamp": new_record.timestamp,
-        }
-
-        if prev_doc_on_update := self.cols.orchestrator_invocations.find_one_and_update(
-            {"invocation_id": invocation_id},
-            {"$set": update_doc},
-            return_document=ReturnDocument.BEFORE,
-        ):
-            prev_status_record_on_update = InvocationStatusRecord(
-                InvocationStatus(prev_doc_on_update["status"]),
-                prev_doc_on_update["status_runner_id"],
-                prev_doc_on_update["status_timestamp"],
+        :param invocation_id: The ID of the invocation to update
+        :param status: The target status
+        :param runner_id: The owner ID for ownership validation
+        :return: The new status record after successful transition
+        :raises InvocationStatusRaceConditionError: If lock not acquired
+        :raises KeyError: If invocation does not exist
+        """
+        # Step 1: Try to acquire the transition lock
+        claim_id = self._acquire_transition_lock(invocation_id)
+        if claim_id is None:
+            # Another writer holds the lock — read current status for error context
+            doc = self.cols.orchestrator_invocations.find_one(
+                {"invocation_id": invocation_id}
             )
-            if prev_status_record != prev_status_record_on_update:
-                error_msg = (
-                    f"We observed a race condition when updating invocation {invocation_id} status from {prev_status_record} to {status}. "
-                    f"The previous status record used for the update was {prev_status_record}, but the actual status record on update was {prev_status_record_on_update}. "
-                    "Plese upgrade to a newer version of mongoDB that supports atomic updates and/or transactions. "
-                )
-                try:
-                    _ = status_record_transition(
-                        prev_status_record_on_update, status, runner_id
-                    )
-                    self.app.logger.warning(
-                        error_msg
-                        + "Continuing without raising an error, because the transition of states is still valid. "
-                    )
-                except InvocationStatusError as ex:
-                    self.app.logger.error(
-                        f"{error_msg} the trasition is invalid and we cannot continue {ex}"
-                    )
-                    raise InvocationStatusRaceConditionError(
-                        invocation_id=invocation_id,
-                        previous_status_record=prev_status_record,
-                        expected_status_record=prev_status_record,
-                        actual_status_record=prev_status_record_on_update,
-                    ) from ex
+            if not doc:
+                raise KeyError(f"Invocation ID {invocation_id} not found")
+            actual = InvocationStatusRecord(
+                InvocationStatus(doc["status"]),
+                doc["status_runner_id"],
+                doc["status_timestamp"],
+            )
+            raise InvocationStatusRaceConditionError(
+                invocation_id=invocation_id,
+                previous_status_record=actual,
+                expected_status_record=actual,
+                actual_status_record=actual,
+            )
 
-        # Check if this transition releases ownership
-        if new_def.releases_ownership:
-            self._release_ownership(invocation_id)
+        # Step 2: We hold the lock — read current status and validate
+        try:
+            doc = self.cols.orchestrator_invocations.find_one(
+                {"invocation_id": invocation_id}
+            )
+            if not doc:
+                raise KeyError(f"Invocation ID {invocation_id} not found")
+            prev_status_record = InvocationStatusRecord(
+                InvocationStatus(doc["status"]),
+                doc["status_runner_id"],
+                doc["status_timestamp"],
+            )
 
-        return new_record
+            # Validate the transition (checks allowed transitions and ownership)
+            new_record = status_record_transition(prev_status_record, status, runner_id)
+
+            # Step 3: Write the new status
+            self.cols.orchestrator_invocations.update_one(
+                {"invocation_id": invocation_id},
+                {
+                    "$set": {
+                        "status": new_record.status.value,
+                        "status_runner_id": new_record.runner_id,
+                        "status_timestamp": new_record.timestamp,
+                    }
+                },
+            )
+            return new_record
+        finally:
+            # Step 4: Always release the lock
+            self._release_transition_lock(invocation_id)
 
     def index_arguments_for_concurrency_control(
         self,

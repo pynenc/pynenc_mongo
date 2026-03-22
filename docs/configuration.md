@@ -41,10 +41,9 @@ See the [Pynenc configuration guide](https://pynenc.readthedocs.io/en/latest/con
 
 ## Orchestrator Settings — `ConfigOrchestratorMongo`
 
-| Setting                             | Type    | Default | Description                                                  |
-| ----------------------------------- | ------- | ------- | ------------------------------------------------------------ |
-| `auto_final_invocation_purge_hours` | `int`   | `24`    | Auto-purge completed invocations after this many hours       |
-| `ownership_consensus_wait_seconds`  | `float` | `0.1`   | Wait time for the pseudo-atomic ownership consensus protocol |
+| Setting                             | Type  | Default | Description                                            |
+| ----------------------------------- | ----- | ------- | ------------------------------------------------------ |
+| `auto_final_invocation_purge_hours` | `int` | `24`    | Auto-purge completed invocations after this many hours |
 
 ## Environment Variables
 
@@ -64,5 +63,4 @@ export PYNENC_MAX_RETRIES=5
 mongo_url: "mongodb://localhost:27017/pynenc"
 mongo_pool_max_connections: 50
 max_retries: 5
-ownership_consensus_wait_seconds: 0.05
 ```

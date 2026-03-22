@@ -1021,7 +1021,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/97/79/9382c00183979e6ce
 
 [[package]]
 name = "pynenc"
-version = "0.1.1rc106.dev182"
+version = "0.1.1rc106.dev185"
 source = { registry = "https://test.pypi.org/simple/" }
 dependencies = [
     { name = "cistell" },
@@ -1030,9 +1030,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://test-files.pythonhosted.org/packages/4b/8b/cf969b7be05b93e4c5f4b5f675aff5fcdf6bfe6f9616fbdd8ea786e6054a/pynenc-0.1.1rc106.dev182.tar.gz", hash = "sha256:9d96a1e37687f91798fcaf6dfe931cac0a8cd812371c72d0cf0bbf519f255137", size = 3468411, upload-time = "2026-03-21T10:06:02.96Z" }
+sdist = { url = "https://test-files.pythonhosted.org/packages/e5/ae/576690d86e7fe844889846bc2b3f13cb62721079edc0be7ae714ad1378d1/pynenc-0.1.1rc106.dev185.tar.gz", hash = "sha256:32fc6c3cf91f945f61c0337def1e925a90cf40d29ba26bcef5d974c9bcc576eb", size = 3471521, upload-time = "2026-03-22T19:09:53.246Z" }
 wheels = [
-    { url = "https://test-files.pythonhosted.org/packages/ca/7f/3f02cee9196ff2aa98e0fd76a4914b1bf4486a4e6dd01896b650e7fe2eb8/pynenc-0.1.1rc106.dev182-py3-none-any.whl", hash = "sha256:9804fa21dada2fb6fbc5752dd9a750ef30b02690cd3f4ce5e486ab6a4dbe58d1", size = 972402, upload-time = "2026-03-21T10:06:01.105Z" },
+    { url = "https://test-files.pythonhosted.org/packages/fb/dc/1a8ee1e601f37b94aff4c0773f0383079d2a7aec2ccd4baf6c7374701444/pynenc-0.1.1rc106.dev185-py3-none-any.whl", hash = "sha256:929b63ab9d973845b4b75431de086b1bc656f040bdc2a23c914739dd77ee5e63", size = 973127, upload-time = "2026-03-22T19:09:50.884Z" },
 ]
 
 [package.optional-dependencies]
@@ -1099,7 +1099,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "pymongo", specifier = ">=3.12.2,<3.13" },
-    { name = "pynenc", specifier = "==0.1.1rc106.dev182", index = "https://test.pypi.org/simple/" },
+    { name = "pynenc", specifier = "==0.1.1rc106.dev185", index = "https://test.pypi.org/simple/" },
 ]
 
 [package.metadata.requires-dev]
@@ -1126,8 +1126,8 @@ docs = [
     { name = "sphinx-design", specifier = ">=0.6.0" },
     { name = "sphinx-inline-tabs", specifier = ">=2023.4.21" },
 ]
-monitor = [{ name = "pynenc", extras = ["monitor"], specifier = "==0.1.1rc106.dev182", index = "https://test.pypi.org/simple/" }]
-tests = [{ name = "pynenc", extras = ["tests"], specifier = "==0.1.1rc106.dev182", index = "https://test.pypi.org/simple/" }]
+monitor = [{ name = "pynenc", extras = ["monitor"], specifier = "==0.1.1rc106.dev185", index = "https://test.pypi.org/simple/" }]
+tests = [{ name = "pynenc", extras = ["tests"], specifier = "==0.1.1rc106.dev185", index = "https://test.pypi.org/simple/" }]
 
 [[package]]
 name = "pytest"
@@ -1538,15 +1538,15 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "0.52.1"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c4/68/79977123bb7be889ad680d79a40f339082c1978b5cfcf62c2d8d196873ac/starlette-0.52.1.tar.gz", hash = "sha256:834edd1b0a23167694292e94f597773bc3f89f362be6effee198165a35d62933", size = 2653702, upload-time = "2026-01-18T13:34:11.062Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/69/17425771797c36cded50b7fe44e850315d039f28b15901ab44839e70b593/starlette-1.0.0.tar.gz", hash = "sha256:6a4beaf1f81bb472fd19ea9b918b50dc3a77a6f2e190a12954b25e6ed5eea149", size = 2655289, upload-time = "2026-03-22T18:29:46.779Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/0d/13d1d239a25cbfb19e740db83143e95c772a1fe10202dda4b76792b114dd/starlette-0.52.1-py3-none-any.whl", hash = "sha256:0029d43eb3d273bc4f83a08720b4912ea4b071087a3b48db01b7c839f7954d74", size = 74272, upload-time = "2026-01-18T13:34:09.188Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/c9/584bc9651441b4ba60cc4d557d8a547b5aff901af35bda3a4ee30c819b82/starlette-1.0.0-py3-none-any.whl", hash = "sha256:d3ec55e0bb321692d275455ddfd3df75fff145d009685eb40dc91fc66b03d38b", size = 72651, upload-time = "2026-03-22T18:29:45.111Z" },
 ]
 
 [[package]]

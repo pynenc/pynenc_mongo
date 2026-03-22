@@ -20,17 +20,19 @@ transient failures automatically:
 Retry behaviour is fully configurable via `max_retries`, `retry_base_delay`,
 `retry_max_delay`, `retry_max_time`, and `retry_indefinitely`.
 
-## Pseudo-Atomic Ownership Protocol
+## Status Transitions and Locking
 
-The orchestrator ensures exactly one runner processes each invocation without external
-locking services:
+The orchestrator ensures exactly one runner can change an invocation's status at a time
+using an array-push lock protocol on the document:
 
-1. Runner appends its ID to an `ownership_claims` array on the invocation document
-2. Waits `ownership_consensus_wait_seconds` (default 0.1 s)
-3. Checks if its ID is **first** in the array — only the winner proceeds
-4. The loser raises `InvocationStatusRaceConditionError` and backs off
+1. Runner pushes a unique claim ID into the `transition_lock` array on the document
+2. Runner reads back the document — if its claim is first in the array, it holds the lock
+3. With the lock held, it reads the current status, validates the transition, and writes the new status
+4. Finally, it clears the `transition_lock` array to release the lock
 
-This consensus protocol tolerates network partitions and clock skew.
+If another writer's claim is first, the runner raises `InvocationStatusRaceConditionError`
+and the caller retries or backs off. This guarantees mutual exclusion without
+transactions or external locking services.
 
 ## Connection Pooling
 
