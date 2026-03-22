@@ -30,9 +30,12 @@ using an array-push lock protocol on the document:
 3. With the lock held, it reads the current status, validates the transition, and writes the new status
 4. Finally, it clears the `transition_lock` array to release the lock
 
-If another writer's claim is first, the runner raises `InvocationStatusRaceConditionError`
-and the caller retries or backs off. This guarantees mutual exclusion without
-transactions or external locking services.
+If another writer's claim is first, the runner cleans up its own claim (via `$pull`)
+and retries with exponential backoff. After all retries are exhausted, it raises
+`InvocationStatusRaceConditionError`. Claims older than `stale_lock_threshold_seconds`
+are treated as stale (owner crashed) and cleared automatically.
+
+This guarantees mutual exclusion without transactions or external locking services.
 
 ## Connection Pooling
 

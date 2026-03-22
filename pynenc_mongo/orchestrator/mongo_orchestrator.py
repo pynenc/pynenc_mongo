@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from functools import cached_property
-from time import time
+from time import sleep, time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -308,7 +308,13 @@ class MongoOrchestrator(BaseOrchestrator):
         if lock and lock[0] == claim_id:
             return claim_id
 
-        # We lost the race. Check if the winner's claim is stale.
+        # We lost the race. Remove our claim to avoid stale debris.
+        self.cols.orchestrator_invocations.update_one(
+            {"invocation_id": invocation_id},
+            {"$pull": {"transition_lock": claim_id}},
+        )
+
+        # Check if the winner's claim is stale (holder crashed).
         if lock:
             holder_ts = self._parse_claim_timestamp(lock[0])
             if time() - holder_ts > self.conf.stale_lock_threshold_seconds:
@@ -336,20 +342,26 @@ class MongoOrchestrator(BaseOrchestrator):
         3. Read current status, validate transition, write new status
         4. Clear the lock array
 
-        If we don't win the lock, raise InvocationStatusRaceConditionError
-        so the caller can retry or back off.
+        Retries lock acquisition with exponential backoff to handle transient
+        contention (e.g. a concurrent release wiping our claim). Only raises
+        InvocationStatusRaceConditionError after all retries are exhausted.
 
         :param invocation_id: The ID of the invocation to update
         :param status: The target status
         :param runner_id: The owner ID for ownership validation
         :return: The new status record after successful transition
-        :raises InvocationStatusRaceConditionError: If lock not acquired
+        :raises InvocationStatusRaceConditionError: If lock not acquired after retries
         :raises KeyError: If invocation does not exist
         """
-        # Step 1: Try to acquire the transition lock
-        claim_id = self._acquire_transition_lock(invocation_id)
-        if claim_id is None:
-            # Another writer holds the lock — read current status for error context
+        max_retries = self.conf.lock_max_retries
+        for attempt in range(max_retries + 1):
+            claim_id = self._acquire_transition_lock(invocation_id)
+            if claim_id is not None:
+                break
+            if attempt < max_retries:
+                sleep(self.conf.lock_retry_base_delay * (attempt + 1))
+        else:
+            # All retries exhausted — read current status for error context
             doc = self.cols.orchestrator_invocations.find_one(
                 {"invocation_id": invocation_id}
             )
@@ -367,7 +379,7 @@ class MongoOrchestrator(BaseOrchestrator):
                 actual_status_record=actual,
             )
 
-        # Step 2: We hold the lock — read current status and validate
+        # We hold the lock — read current status and validate
         try:
             doc = self.cols.orchestrator_invocations.find_one(
                 {"invocation_id": invocation_id}
