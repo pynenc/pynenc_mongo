@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 class OrchestratorCollections(MongoCollections):
     """Collections specific to MongoOrchestrator with prefix orchestrator_."""
 
-    def __init__(self, conf: "ConfigMongo"):
-        super().__init__(conf, prefix="orchestrator_")
+    def __init__(self, conf: "ConfigMongo", app_id: str):
+        super().__init__(conf, prefix="orchestrator_", app_id=app_id)
 
     @cached_property
     def orchestrator_invocations(self) -> "RetryableCollection":
@@ -26,6 +26,7 @@ class OrchestratorCollections(MongoCollections):
                 IndexModel([("call_id", ASCENDING)]),
                 IndexModel([("status", ASCENDING)]),
                 IndexModel([("auto_purge_timestamp", ASCENDING)]),
+                IndexModel([("status_runner_id", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)
@@ -44,29 +45,6 @@ class OrchestratorCollections(MongoCollections):
         return self.instantiate_retriable_coll(spec)
 
     @cached_property
-    def orchestrator_cycle_calls(self) -> "RetryableCollection":
-        spec = CollectionSpec(
-            name="orchestrator_cycle_calls",
-            indexes=[
-                IndexModel([("call_id", ASCENDING)], unique=True),
-            ],
-        )
-        return self.instantiate_retriable_coll(spec)
-
-    @cached_property
-    def orchestrator_cycle_edges(self) -> "RetryableCollection":
-        spec = CollectionSpec(
-            name="orchestrator_cycle_edges",
-            indexes=[
-                IndexModel(
-                    [("caller_id", ASCENDING), ("callee_id", ASCENDING)], unique=True
-                ),
-                IndexModel([("callee_id", ASCENDING)]),
-            ],
-        )
-        return self.instantiate_retriable_coll(spec)
-
-    @cached_property
     def orchestrator_blocking_edges(self) -> "RetryableCollection":
         spec = CollectionSpec(
             name="orchestrator_blocking_edges",
@@ -76,6 +54,18 @@ class OrchestratorCollections(MongoCollections):
                 ),
                 IndexModel([("waited_id", ASCENDING)]),
                 IndexModel([("waiter_id", ASCENDING)]),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def orchestrator_runner_heartbeats(self) -> "RetryableCollection":
+        spec = CollectionSpec(
+            name="orchestrator_runner_heartbeats",
+            indexes=[
+                IndexModel([("runner_id", ASCENDING)], unique=True),
+                IndexModel([("last_heartbeat", ASCENDING)]),
+                IndexModel([("creation_timestamp", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)

@@ -7,7 +7,7 @@ pynenc-mongo plugin package.
 Key components:
 - MongoBuilderPlugin: Plugin class that registers Mongo methods
 - mongo(): Main method for full Mongo stack configuration
-- mongo_arg_cache(): Mongo-specific argument caching method
+- mongo_client_data_store(): Mongo-specific client data store method
 - mongo_trigger(): Mongo-specific trigger system method
 """
 
@@ -33,7 +33,9 @@ class MongoBuilderPlugin:
         builder_class.register_plugin_method("mongo", mongo)
 
         # Register component-specific methods
-        builder_class.register_plugin_method("mongo_arg_cache", mongo_arg_cache)
+        builder_class.register_plugin_method(
+            "mongo_client_data_store", mongo_client_data_store
+        )
         builder_class.register_plugin_method("mongo_trigger", mongo_trigger)
 
         # Register configuration validator
@@ -41,7 +43,14 @@ class MongoBuilderPlugin:
 
 
 def mongo(
-    builder: "PynencBuilder", url: str | None = None, db: int | None = None
+    builder: "PynencBuilder",
+    url: str | None = None,
+    db: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    username: str | None = None,
+    password: str | None = None,
+    auth_source: str | None = None,
 ) -> "PynencBuilder":
     """
     Configure Mongo components for the Pynenc application.
@@ -51,30 +60,49 @@ def mongo(
 
     :param PynencBuilder builder: The PynencBuilder instance
     :param str | None url: The Mongo URL to connect to. If specified, overrides all other connection
-        parameters including host, port, and db
-    :param int | None db: The Mongo database number to use. Only valid when url is not provided.
-        If url is provided, the database should be specified in the URL itself
+        parameters including host, port, db, username, password, and auth_source.
+    :param str | None db: The Mongo database name to use. Only valid when url is not provided.
+        If url is provided, the database should be specified in the URL itself.
+    :param str | None host: The Mongo host to connect to. Ignored if url is provided.
+    :param int | None port: The Mongo port to connect to. Ignored if url is provided.
+    :param str | None username: The Mongo username to use. Ignored if url is provided.
+    :param str | None password: The Mongo password to use. Ignored if url is provided.
+    :param str | None auth_source: The Mongo authentication source database. Ignored if url is provided.
     :return: The builder instance for method chaining
-    :raises ValueError: If both url and db are provided, since url takes precedence
+    :raises ValueError: If both url and any other connection parameter are provided, since url takes precedence
     """
-    if url and db is not None:
-        raise ValueError(
-            "Cannot specify both 'url' and 'db' parameters. "
-            "When using 'url', specify the database in the URL (e.g., 'mongo://host:port/db'). "
-            "The 'url' parameter overrides all other connection settings."
-        )
-
+    # If url is provided, it takes precedence over all other connection parameters
     if url:
+        # Warn if any other connection parameter is also provided
+        if any(
+            x is not None for x in (db, host, port, username, password, auth_source)
+        ):
+            raise ValueError(
+                "Cannot specify both 'url' and other connection parameters. "
+                "When using 'url', specify all connection info in the URL. "
+                "The 'url' parameter overrides all other connection settings."
+            )
         builder._config["mongo_url"] = url
-    elif db is not None:
-        builder._config["mongo_db"] = db
+    else:
+        if db is not None:
+            builder._config["mongo_db"] = db
+        if host is not None:
+            builder._config["mongo_host"] = host
+        if port is not None:
+            builder._config["mongo_port"] = port
+        if username is not None:
+            builder._config["mongo_username"] = username
+        if password is not None:
+            builder._config["mongo_password"] = password
+        if auth_source is not None:
+            builder._config["mongo_auth_source"] = auth_source
 
     builder._config.update(
         {
             "orchestrator_cls": "MongoOrchestrator",
             "broker_cls": "MongoBroker",
             "state_backend_cls": "MongoStateBackend",
-            "arg_cache_cls": "MongoArgCache",
+            "client_data_store_cls": "MongoClientDataStore",
             "trigger_cls": "MongoTrigger",
         }
     )
@@ -83,15 +111,16 @@ def mongo(
     return builder
 
 
-def mongo_arg_cache(
+def mongo_client_data_store(
     builder: "PynencBuilder",
     min_size_to_cache: int = 1024,
     local_cache_size: int = 1024,
+    max_size_to_cache: int = 16 * 1024 * 1024,
 ) -> "PynencBuilder":
     """
-    Configure Mongo-based argument caching.
+    Configure Mongo-based client data store.
 
-    This method configures the Mongo argument cache with the specified parameters.
+    This method configures the Mongo client data store with the specified parameters.
     It requires that Mongo components have been configured either through mongo()
     or through configuration files.
 
@@ -99,18 +128,20 @@ def mongo_arg_cache(
     :param int min_size_to_cache: Minimum string length (in characters) required to cache an argument.
         Arguments smaller than this size will be passed directly. Default is 1024 characters (roughly 1KB)
     :param int local_cache_size: Maximum number of items to cache locally. Default is 1024
+    :param int max_size_to_cache: Maximum size of an argument to cache. Default is 16MB
     :return: The builder instance for method chaining
     :raises ValueError: If Mongo configuration is not present
     """
     if "mongo" not in builder._plugin_components and "mongo_url" not in builder._config:
         raise ValueError(
-            "Mongo arg cache requires mongo configuration. Call mongo() first."
+            "Mongo client data store requires mongo configuration. Call mongo() first."
         )
 
     builder._config.update(
         {
-            "arg_cache_cls": "MongoArgCache",
+            "client_data_store_cls": "MongoClientDataStore",
             "min_size_to_cache": min_size_to_cache,
+            "max_size_to_cache": max_size_to_cache,
             "local_cache_size": local_cache_size,
         }
     )
@@ -171,7 +202,7 @@ def validate_mongo_config(config: dict[str, Any]) -> None:
             "orchestrator_cls",
             "broker_cls",
             "state_backend_cls",
-            "arg_cache_cls",
+            "client_data_store_cls",
             "trigger_cls",
         ]
     )

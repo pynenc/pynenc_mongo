@@ -4,10 +4,15 @@ from unittest.mock import MagicMock, patch
 import mongomock
 import pytest
 from pymongo import ASCENDING, IndexModel
-from pymongo.errors import AutoReconnect
+from pymongo.errors import (
+    AutoReconnect,
+)
 
 from pynenc_mongo.conf.config_mongo import ConfigMongo
-from pynenc_mongo.util.mongo_client import PynencMongoClient, RetryableCollection
+from pynenc_mongo.util.mongo_client import (
+    PynencMongoClient,
+    RetryableCollection,
+)
 from pynenc_mongo.util.mongo_collections import CollectionSpec
 
 if TYPE_CHECKING:
@@ -18,6 +23,12 @@ if TYPE_CHECKING:
 def mongo_conf() -> ConfigMongo:
     """Fixture for a sample ConfigMongo instance."""
     return ConfigMongo({"mongo_url": "mongodb://localhost:27017/test"})
+
+
+@pytest.fixture(autouse=True)
+def clear_singleton_cache() -> None:
+    """Clear singleton cache before each test to ensure isolation."""
+    PynencMongoClient._instances.clear()
 
 
 @pytest.fixture
@@ -34,7 +45,7 @@ def test_singleton_instance(mongo_conf: ConfigMongo) -> None:
     client1 = PynencMongoClient.get_instance(mongo_conf)
     client2 = PynencMongoClient.get_instance(mongo_conf)
     assert client1 is client2, "Singleton instance should be the same"
-    assert client1.conf == mongo_conf, "Config should match"
+    assert client1.conf is mongo_conf, "Config should be the same instance"
 
 
 def test_different_config_instances(mongo_conf: ConfigMongo) -> None:

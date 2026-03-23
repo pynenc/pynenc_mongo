@@ -10,11 +10,15 @@ if TYPE_CHECKING:
     from pynenc_mongo.util.mongo_client import RetryableCollection
 
 
+# Suffix used for app_info collections, used by discover_app_infos to scan all apps
+APP_INFO_COLLECTION_SUFFIX = "state_backend_app_info"
+
+
 class StateBackendCollections(MongoCollections):
     """Collections specific to MongoStateBackend with prefix state_backend_."""
 
-    def __init__(self, conf: "ConfigMongo"):
-        super().__init__(conf, prefix="state_backend_")
+    def __init__(self, conf: "ConfigMongo", app_id: str):
+        super().__init__(conf, prefix="state_backend_", app_id=app_id)
 
     @cached_property
     def state_backend_results(self) -> "RetryableCollection":
@@ -42,6 +46,9 @@ class StateBackendCollections(MongoCollections):
             name="state_backend_invocations",
             indexes=[
                 IndexModel([("invocation_id", ASCENDING)], unique=True),
+                IndexModel([("parent_invocation_id", ASCENDING)]),
+                IndexModel([("workflow_id", ASCENDING)]),
+                IndexModel([("workflow_type_key", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)
@@ -59,6 +66,8 @@ class StateBackendCollections(MongoCollections):
                     ],
                     unique=True,
                 ),
+                # Add index for time-range queries
+                IndexModel([("history_timestamp", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)
@@ -77,7 +86,7 @@ class StateBackendCollections(MongoCollections):
     @cached_property
     def state_backend_app_info(self) -> "RetryableCollection":
         spec = CollectionSpec(
-            name="state_backend_app_info",
+            name=APP_INFO_COLLECTION_SUFFIX,
             indexes=[
                 IndexModel([("app_id", ASCENDING)], unique=True),
             ],
@@ -108,6 +117,36 @@ class StateBackendCollections(MongoCollections):
                     ],
                     unique=True,
                 ),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def state_backend_runner_contexts(self) -> "RetryableCollection":
+        spec = CollectionSpec(
+            name="state_backend_runner_contexts",
+            indexes=[
+                IndexModel([("runner_id", ASCENDING)], unique=True),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def state_backend_chunks(self) -> "RetryableCollection":
+        """Collection for storing chunked data exceeding BSON limits.
+
+        Chunk documents structure:
+            - chunk_key: "{invocation_id}:{data_type}:{item_key}"
+            - seq: 0-based sequence number for chunk ordering
+            - data: binary compressed chunk payload
+        """
+        spec = CollectionSpec(
+            name="state_backend_chunks",
+            indexes=[
+                # Primary index for retrieval (ordered by seq for reassembly)
+                IndexModel([("chunk_key", ASCENDING), ("seq", ASCENDING)], unique=True),
+                # Secondary index for deletion operations
+                IndexModel([("chunk_key", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)

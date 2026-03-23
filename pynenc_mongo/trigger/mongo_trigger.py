@@ -1,19 +1,25 @@
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from pymongo.errors import DuplicateKeyError
 from pymongo.operations import ReplaceOne
+from pynenc.identifiers.task_id import TaskId
+from pynenc.models.trigger_definition_dto import TriggerDefinitionDTO
 from pynenc.trigger.base_trigger import BaseTrigger
-from pynenc.trigger.conditions import ConditionContext, TriggerCondition, ValidCondition
+from pynenc.trigger.conditions import (
+    CompositeLogic,
+    ConditionContext,
+    TriggerCondition,
+    ValidCondition,
+)
 
 from pynenc_mongo.conf.config_trigger import ConfigTriggerMongo
 from pynenc_mongo.trigger.mongo_trigger_collections import TriggerCollections
 
 if TYPE_CHECKING:
     from pynenc.app import Pynenc
-    from pynenc.trigger.trigger_definitions import TriggerDefinition
 
 
 class MongoTrigger(BaseTrigger):
@@ -25,7 +31,7 @@ class MongoTrigger(BaseTrigger):
 
     def __init__(self, app: "Pynenc") -> None:
         super().__init__(app)
-        self.cols = TriggerCollections(self.conf)
+        self.cols = TriggerCollections(self.conf, app_id=self.app.app_id)
 
     @cached_property
     def conf(self) -> ConfigTriggerMongo:
@@ -51,11 +57,14 @@ class MongoTrigger(BaseTrigger):
             return TriggerCondition.from_json(doc["condition_json"], self.app)
         return None
 
-    def register_trigger(self, trigger: "TriggerDefinition") -> None:
+    def register_trigger(self, trigger: "TriggerDefinitionDTO") -> None:
         self.cols.trg_triggers.insert_or_ignore(
             {
                 "trigger_id": trigger.trigger_id,
-                "trigger_json": trigger.to_json(self.app),
+                "task_id_key": trigger.task_id.key,
+                "condition_ids": trigger.condition_ids,
+                "logic_value": trigger.logic.value,
+                "argument_provider_json": trigger.argument_provider_json,
             }
         )
         for condition_id in trigger.condition_ids:
@@ -63,30 +72,30 @@ class MongoTrigger(BaseTrigger):
                 {"condition_id": condition_id, "trigger_id": trigger.trigger_id}
             )
 
-    def get_trigger(self, trigger_id: str) -> Optional["TriggerDefinition"]:
+    def _get_trigger(self, trigger_id: str) -> Optional["TriggerDefinitionDTO"]:
         doc = self.cols.trg_triggers.find_one({"trigger_id": trigger_id})
         if doc:
-            from pynenc.trigger.trigger_definitions import TriggerDefinition
-
-            return TriggerDefinition.from_json(doc["trigger_json"], self.app)
+            return self._parse_trigger_dto(doc)
         return None
+
+    def _parse_trigger_dto(
+        self, trigger_dict: dict[str, Any]
+    ) -> "TriggerDefinitionDTO":
+        return TriggerDefinitionDTO(
+            trigger_id=trigger_dict["trigger_id"],
+            task_id=TaskId.from_key(trigger_dict["task_id_key"]),
+            condition_ids=trigger_dict["condition_ids"],
+            logic=CompositeLogic(trigger_dict["logic_value"]),
+            argument_provider_json=trigger_dict.get("argument_provider_json"),
+        )
 
     def get_triggers_for_condition(
         self, condition_id: str
-    ) -> list["TriggerDefinition"]:
+    ) -> list["TriggerDefinitionDTO"]:
         trigger_docs = list(
-            self.cols.trg_condition_triggers.find({"condition_id": condition_id})
+            self.cols.trg_triggers.find({"condition_ids": condition_id})
         )
-        triggers = []
-        for doc in trigger_docs:
-            trigger = self.get_trigger(doc["trigger_id"])
-            if trigger:
-                triggers.append(trigger)
-            else:
-                self.app.logger.warning(
-                    f"Trigger {doc['trigger_id']} not found for condition {condition_id}"
-                )
-        return triggers
+        return [self._parse_trigger_dto(doc) for doc in trigger_docs]
 
     def record_valid_condition(self, valid_condition: ValidCondition) -> None:
         self.cols.trg_valid_conditions.insert_or_ignore(
@@ -135,9 +144,22 @@ class MongoTrigger(BaseTrigger):
         return conditions
 
     def get_last_cron_execution(self, condition_id: str) -> datetime | None:
+        """
+        Get the last execution time for a cron condition.
+
+        :param condition_id: ID of the condition to check
+        :return: Last execution time in UTC, or None if never executed
+        """
         doc = self.cols.trg_conditions.find_one({"condition_id": condition_id})
         if doc and doc.get("last_cron_execution"):
-            return doc["last_cron_execution"]
+            dt = doc["last_cron_execution"]
+            # Ensure datetime is UTC-aware
+            if dt.tzinfo is None:
+                # Naive datetime - assume it's UTC and make it aware
+                return dt.replace(tzinfo=UTC)
+            else:
+                # Already aware - convert to UTC
+                return dt.astimezone(UTC)
         return None
 
     def store_last_cron_execution(
@@ -146,30 +168,54 @@ class MongoTrigger(BaseTrigger):
         execution_time: datetime,
         expected_last_execution: datetime | None = None,
     ) -> bool:
+        """
+        Store the last execution time for a cron condition with optimistic locking.
+
+        :param condition_id: ID of the condition
+        :param execution_time: Time of execution in UTC
+        :param expected_last_execution: Expected current value for optimistic locking
+        :return: True if update succeeded, False if another process won the race
+        """
         filter_doc: dict = {"condition_id": condition_id}
         if expected_last_execution is not None:
+            # Ensure expected_last_execution is UTC-aware for comparison
+            if expected_last_execution.tzinfo is None:
+                expected_last_execution = expected_last_execution.replace(tzinfo=UTC)
+            else:
+                expected_last_execution = expected_last_execution.astimezone(UTC)
             filter_doc["last_cron_execution"] = expected_last_execution
         else:
             filter_doc["$or"] = [
                 {"last_cron_execution": None},
                 {"last_cron_execution": {"$exists": False}},
             ]
+
+        # Ensure execution_time is UTC-aware
+        if execution_time.tzinfo is None:
+            execution_time = execution_time.replace(tzinfo=UTC)
+        else:
+            execution_time = execution_time.astimezone(UTC)
+
         result = self.cols.trg_conditions.update_one(
             filter_doc, {"$set": {"last_cron_execution": execution_time}}
         )
         return result.modified_count > 0
 
-    def _register_source_task_condition(self, task_id: str, condition_id: str) -> None:
+    def _register_source_task_condition(
+        self, task_id: "TaskId", condition_id: str
+    ) -> None:
         self.cols.trg_source_task_conditions.insert_or_ignore(
-            {"task_id": task_id, "condition_id": condition_id}
+            {"task_id_key": task_id.key, "condition_id": condition_id}
         )
 
     def get_conditions_sourced_from_task(
-        self, task_id: str, context_type: type[ConditionContext] | None = None
+        self, task_id: "TaskId", context_type: type[ConditionContext] | None = None
     ) -> list[TriggerCondition]:
         condition_ids = [
             doc["condition_id"]
-            for doc in self.cols.trg_source_task_conditions.find({"task_id": task_id})
+            for doc in self.cols.trg_source_task_conditions.find(
+                {"task_id_key": task_id.key}
+            )
         ]
         conditions = [self.get_condition(cid) for cid in condition_ids]
         conditions = [c for c in conditions if c]
@@ -230,9 +276,9 @@ class MongoTrigger(BaseTrigger):
             self.app.logger.error(f"Claim failed for {trigger_run_id}: {e}")
             return False
 
-    def clean_task_trigger_definitions(self, task_id: str) -> None:
+    def clean_task_trigger_definitions(self, task_id: "TaskId") -> None:
         trigger_docs = self.cols.trg_triggers.find(
-            {"trigger_json": {"$regex": f'"task_id": "{task_id}"'}}
+            {"trigger_json": {"$regex": f'"task_id_key": "{task_id.key}"'}}
         )
         trigger_ids = [doc["trigger_id"] for doc in trigger_docs]
         if trigger_ids:

@@ -70,11 +70,14 @@ def build_test_combinations() -> list[AppComponents]:
 def app_combination_instance(
     request: "FixtureRequest",
     app_instance_builder: "PynencBuilder",
+    mongo_url: str,
     monkeypatch: MonkeyPatch,
 ) -> "Pynenc":
     components: AppComponents = request.param
     test_module, test_name = get_module_name(request)
     app_id = f"{test_module}.{test_name}"
+
+    # Collections are isolated by app_id prefix, so all tests can share the same database
     app_instance_builder = app_instance_builder.app_id(app_id).logging_level("debug")
     app_instance_builder._config["serializer_cls"] = components.serializer.__name__
     app_instance_builder._config["runner_cls"] = components.runner.__name__
@@ -88,14 +91,15 @@ def app_combination_instance(
     monkeypatch.setenv("PYNENC__SERIALIZER_CLS", components.serializer.__name__)
     monkeypatch.setenv("PYNENC__RUNNER_CLS", components.runner.__name__)
     monkeypatch.setenv("PYNENC__ORCHESTRATOR__CYCLE_CONTROL", "True")
-    monkeypatch.setenv("PYNENC__MONGO_URL", app_instance_builder._config["mongo_url"])
+    monkeypatch.setenv("PYNENC__MONGO_URL", mongo_url)
     monkeypatch.setenv("PYNENC__PRINT_ARGUMENTS", "False")
 
     app_instance = app_instance_builder.build()
 
     # Set additional environment variables for subprocess components
     monkeypatch.setenv(
-        "PYNENC__ARG_CACHE_CLS", app_instance.arg_cache.__class__.__name__
+        "PYNENC__CLIENT_DATA_STORE_CLS",
+        app_instance.client_data_store.__class__.__name__,
     )
     monkeypatch.setenv(
         "PYNENC__ORCHESTRATOR_CLS", app_instance.orchestrator.__class__.__name__

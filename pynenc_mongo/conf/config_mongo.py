@@ -57,6 +57,26 @@ class ConfigMongo(ConfigPynencBase):
         The base delay in seconds between retry attempts for MongoDB operations.
         Defaults to 0.1.
 
+    :cvar ConfigField[float] retry_max_delay:
+        The maximum delay in seconds between retry attempts. Delays are capped at this
+        value to prevent excessively long waits. Defaults to 60.0 (1 minute).
+
+    :cvar ConfigField[float] retry_max_time:
+        The maximum total time in seconds to spend retrying before giving up.
+        Defaults to 300.0 (5 minutes). This ensures the system keeps trying to
+        reconnect for a reasonable period during temporary outages.
+
+    :cvar ConfigField[bool] retry_indefinitely:
+        If True, retry indefinitely until connection is restored, ignoring max_retries
+        and retry_max_time. Use with caution as this may block forever.
+        Defaults to False.
+
+    :cvar ConfigField[int] chunk_threshold:
+        The size threshold in bytes above which documents are compressed and stored
+        as chunked documents instead of inline. This allows storing data larger than
+        MongoDB's 16MB BSON limit. Defaults to 15MB (15728640 bytes) to provide
+        some safety margin.
+
     Example usage of the `ConfigMongo` class involves initializing it with specific
     values for host, port, database, or authentication source, or relying on the defaults
     for a standard Mongo setup.
@@ -78,3 +98,13 @@ class ConfigMongo(ConfigPynencBase):
     # Connection management settings
     max_retries = ConfigField(3)
     retry_base_delay = ConfigField(0.1)
+    retry_max_delay = ConfigField(60.0)
+    retry_max_time = ConfigField(300.0)
+    retry_indefinitely = ConfigField(False)
+
+    # Chunk threshold - documents larger than this will be compressed and chunked
+    # This value controls both:
+    # 1. When to decide data needs chunking (if encoded size > threshold)
+    # 2. Maximum size of each chunk when splitting large data
+    # Default 15MB to stay safely under MongoDB's 16MB BSON limit
+    chunk_threshold = ConfigField(15 * 1024 * 1024)

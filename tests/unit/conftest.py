@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 @pytest.fixture
 def patch_mongo_client() -> "Generator[None, None, None]":
     """
-    Patch PyMongoClient in pynenc_mongo.util.mongo_client to use mongomock.MongoClient.
+    Patch PyMongoClient to use mongomock for unit tests.
 
     Use this fixture to ensure all MongoDB operations are mocked for unit tests.
     """
