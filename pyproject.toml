@@ -17,7 +17,7 @@ classifiers = [
 
 dependencies = [
     "pynenc==0.1.1rc106.dev186",
-    "pymongo>=3.12.2,<3.13",
+    "pymongo>=3.12.2,<4.17",
 ]
 
 [[tool.uv.index]]
