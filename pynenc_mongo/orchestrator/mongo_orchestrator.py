@@ -1,10 +1,11 @@
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import cached_property
 from time import sleep, time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from pymongo.errors import DuplicateKeyError
 from pynenc.exceptions import (
     InvocationStatusRaceConditionError,
 )
@@ -14,7 +15,11 @@ from pynenc.invocation.status import (
     InvocationStatusRecord,
     status_record_transition,
 )
-from pynenc.orchestrator.atomic_service import ActiveRunnerInfo
+from pynenc.orchestrator.atomic_service import (
+    ActiveRunnerInfo,
+    AtomicServiceExecution,
+    AtomicServiceExecutionStatus,
+)
 from pynenc.orchestrator.base_orchestrator import (
     BaseBlockingControl,
     BaseOrchestrator,
@@ -29,6 +34,7 @@ if TYPE_CHECKING:
     from pynenc.app import Pynenc
     from pynenc.identifiers.call_id import CallId
     from pynenc.invocation.dist_invocation import DistributedInvocation
+    from pynenc.orchestrator.atomic_service import AtomicServiceRun
     from pynenc.task import Task, TaskId
     from pynenc.types import Params, Result
 
@@ -515,21 +521,286 @@ class MongoOrchestrator(BaseOrchestrator):
                     },
                     "$setOnInsert": {
                         "creation_timestamp": current_time,
-                        "last_service_start": None,
-                        "last_service_end": None,
                     },
                 },
                 upsert=True,
             )
 
-    def record_atomic_service_execution(
-        self, runner_id: str, start_time: datetime, end_time: datetime
+    def record_atomic_service_execution_start(
+        self,
+        atomic_service_run: "AtomicServiceRun",
+        started_at: datetime | None,
+        status: AtomicServiceExecutionStatus = AtomicServiceExecutionStatus.RUNNING,
+        reason: str = "",
+    ) -> bool:
+        """Insert a new atomic-service execution record."""
+        atomic_service_id = atomic_service_run.atomic_service_id
+        execution_id = atomic_service_id.atomic_service_run_id
+        actual_started_at = started_at or datetime.now(UTC)
+        atomic_service_run.started_at = actual_started_at
+
+        if status == AtomicServiceExecutionStatus.RUNNING:
+            active_collection = self.cols.orchestrator_atomic_service_active_execution
+            try:
+                active_collection.insert_one(
+                    {
+                        "_id": "active",
+                        "atomic_service_run_id": execution_id,
+                        "runner_id": atomic_service_id.runner_id,
+                    }
+                )
+            except DuplicateKeyError:
+                active = active_collection.find_one({"_id": "active"})
+                if active and active.get("atomic_service_run_id") == execution_id:
+                    return True
+                prior_id = (
+                    active.get("atomic_service_run_id", "unknown")
+                    if active
+                    else "unknown"
+                )
+                prior_runner = (
+                    active.get("runner_id", "unknown") if active else "unknown"
+                )
+                self._store_atomic_service_execution(
+                    atomic_service_run,
+                    actual_started_at,
+                    AtomicServiceExecutionStatus.BLOCKED,
+                    reason or f"prior_running:{prior_id} runner:{prior_runner}",
+                )
+                self.purge_atomic_service_executions()
+                return False
+
+        try:
+            self._store_atomic_service_execution(
+                atomic_service_run,
+                actual_started_at,
+                status,
+                reason,
+            )
+        except Exception:
+            if status == AtomicServiceExecutionStatus.RUNNING:
+                self._release_atomic_service_active_execution(execution_id)
+            raise
+        if status != AtomicServiceExecutionStatus.RUNNING:
+            self.purge_atomic_service_executions()
+        return status != AtomicServiceExecutionStatus.BLOCKED
+
+    def _store_atomic_service_execution(
+        self,
+        atomic_service_run: "AtomicServiceRun",
+        started_at: datetime,
+        status: AtomicServiceExecutionStatus,
+        reason: str,
     ) -> None:
-        """Record the latest atomic service execution window for a runner."""
-        self.cols.orchestrator_runner_heartbeats.update_one(
-            {"runner_id": runner_id},
-            {"$set": {"last_service_start": start_time, "last_service_end": end_time}},
+        """Persist one atomic-service execution record."""
+        atomic_service_id = atomic_service_run.atomic_service_id
+        start_iso = started_at.isoformat()
+        self.cols.orchestrator_atomic_service_executions.update_one(
+            {"atomic_service_run_id": atomic_service_id.atomic_service_run_id},
+            {
+                "$set": {
+                    "runner_id": atomic_service_id.runner_id,
+                    "start_time": start_iso,
+                    "end_time": (
+                        start_iso
+                        if status == AtomicServiceExecutionStatus.BLOCKED
+                        else None
+                    ),
+                    "status": str(status),
+                    "reason": reason,
+                }
+            },
+            upsert=True,
         )
+
+    def finalize_atomic_service_execution(
+        self,
+        atomic_service_run: "AtomicServiceRun",
+        end_time: datetime,
+        status: AtomicServiceExecutionStatus,
+        reason: str = "",
+    ) -> None:
+        """Transition the RUNNING record for this run to a terminal status."""
+        atomic_service_id = atomic_service_run.atomic_service_id
+        end_iso = end_time.isoformat()
+        update_fields = {"end_time": end_iso, "status": str(status)}
+        if reason:
+            update_fields["reason"] = reason
+        updated = self.cols.orchestrator_atomic_service_executions.update_one(
+            {
+                "atomic_service_run_id": atomic_service_id.atomic_service_run_id,
+                "status": str(AtomicServiceExecutionStatus.RUNNING),
+            },
+            {"$set": update_fields},
+        )
+        if updated.modified_count:
+            self._release_atomic_service_active_execution(
+                atomic_service_id.atomic_service_run_id
+            )
+            self.purge_atomic_service_executions()
+            return
+
+        existing = self.cols.orchestrator_atomic_service_executions.find_one(
+            {"atomic_service_run_id": atomic_service_id.atomic_service_run_id},
+            {"status": 1},
+        )
+        if existing is None:
+            try:
+                self.cols.orchestrator_atomic_service_executions.insert_one(
+                    {
+                        "runner_id": atomic_service_id.runner_id,
+                        "start_time": end_iso,
+                        "end_time": end_iso,
+                        "atomic_service_run_id": (
+                            atomic_service_id.atomic_service_run_id
+                        ),
+                        "status": str(status),
+                        "reason": reason,
+                    }
+                )
+            except DuplicateKeyError:
+                pass
+        self._release_atomic_service_active_execution(
+            atomic_service_id.atomic_service_run_id
+        )
+        if existing is None:
+            self.purge_atomic_service_executions()
+
+    def _release_atomic_service_active_execution(self, execution_id: str) -> None:
+        """Release the active marker only when this execution owns it."""
+        self.cols.orchestrator_atomic_service_active_execution.delete_one(
+            {
+                "_id": "active",
+                "atomic_service_run_id": execution_id,
+            }
+        )
+
+    def get_active_atomic_service_executions(
+        self,
+    ) -> list[AtomicServiceExecution]:
+        """Return RUNNING executions ordered most-recently-started first."""
+        docs = self.cols.orchestrator_atomic_service_executions.find(
+            {"status": str(AtomicServiceExecutionStatus.RUNNING)}
+        ).sort("start_time", -1)
+        return [
+            AtomicServiceExecution.from_raw(
+                runner_id=doc["runner_id"],
+                atomic_service_run_id=doc["atomic_service_run_id"],
+                start_time=datetime.fromisoformat(doc["start_time"]),
+                end_time=(
+                    datetime.fromisoformat(doc["end_time"])
+                    if doc.get("end_time")
+                    else None
+                ),
+                status=AtomicServiceExecutionStatus(
+                    doc.get("status", AtomicServiceExecutionStatus.RUNNING)
+                ),
+                reason=str(doc.get("reason", "")),
+            )
+            for doc in docs
+        ]
+
+    def get_atomic_service_executions_in_timerange(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        limit: int = 1000,
+        *,
+        runner_id: str | None = None,
+        min_duration_seconds: float = 0.0,
+    ) -> list[AtomicServiceExecution]:
+        """Retrieve atomic service execution windows overlapping a time range."""
+        if limit <= 0:
+            return []
+        query: dict = {
+            "$and": [
+                {
+                    "$or": [
+                        {
+                            "end_time": {
+                                "$ne": None,
+                                "$gte": start_time.isoformat(),
+                            }
+                        },
+                        {
+                            "end_time": None,
+                            "start_time": {"$gte": start_time.isoformat()},
+                        },
+                    ]
+                },
+                {"start_time": {"$lte": end_time.isoformat()}},
+            ]
+        }
+        if runner_id is not None:
+            query["runner_id"] = runner_id
+        docs = (
+            self.cols.orchestrator_atomic_service_executions.find(query)
+            .sort("start_time", -1)
+            .limit(limit)
+        )
+        executions = [
+            AtomicServiceExecution.from_raw(
+                runner_id=doc["runner_id"],
+                atomic_service_run_id=doc["atomic_service_run_id"],
+                start_time=datetime.fromisoformat(doc["start_time"]),
+                end_time=(
+                    datetime.fromisoformat(doc["end_time"])
+                    if doc.get("end_time")
+                    else None
+                ),
+                status=AtomicServiceExecutionStatus(
+                    doc.get("status", AtomicServiceExecutionStatus.RUNNING)
+                ),
+                reason=str(doc.get("reason", "")),
+            )
+            for doc in docs
+        ]
+        if min_duration_seconds > 0.0:
+            executions = [
+                e for e in executions if e.duration_seconds >= min_duration_seconds
+            ]
+        return executions
+
+    def purge_atomic_service_executions(self) -> int:
+        """Trim atomic-service execution history by age and capacity."""
+        removed = 0
+        retention_minutes = float(
+            self.app.conf.atomic_service_execution_retention_minutes
+        )
+        max_records = int(self.app.conf.atomic_service_execution_max_records)
+        protected = self.app.trigger.get_referenced_atomic_service_run_ids()
+        collection = self.cols.orchestrator_atomic_service_executions
+        if retention_minutes > 0:
+            cutoff = (
+                datetime.now(UTC) - timedelta(minutes=retention_minutes)
+            ).isoformat()
+            delete_query: dict = {
+                "status": {"$ne": str(AtomicServiceExecutionStatus.RUNNING)},
+                "end_time": {"$lt": cutoff},
+            }
+            if protected:
+                delete_query["atomic_service_run_id"] = {"$nin": list(protected)}
+            result = collection.delete_many(delete_query)
+            removed += result.deleted_count
+        if max_records > 0:
+            count_query: dict = {
+                "status": {"$ne": str(AtomicServiceExecutionStatus.RUNNING)}
+            }
+            if protected:
+                count_query["atomic_service_run_id"] = {"$nin": list(protected)}
+            current_count = collection.count_documents(count_query)
+            excess = current_count - max_records
+            if excess > 0:
+                stale_ids = [
+                    doc["_id"]
+                    for doc in collection.find(count_query, {"_id": 1})
+                    .sort("start_time", 1)
+                    .limit(excess)
+                ]
+                if stale_ids:
+                    result = collection.delete_many({"_id": {"$in": stale_ids}})
+                    removed += result.deleted_count
+        return removed
 
     def _get_active_runners(
         self, timeout_seconds: float, can_run_atomic_service: bool | None
@@ -543,7 +814,7 @@ class MongoOrchestrator(BaseOrchestrator):
 
         :param float timeout_seconds: Heartbeat timeout in seconds (typically from atomic_service_runner_considered_dead_after_minutes config)
         :param bool | None can_run_atomic_service: If specified, filters runners based on their eligibility to run atomic services
-        :return: List of active runners ordered by creation time (oldest first)
+        :return: List of active runners ordered by creation time, then runner ID
         :rtype: list["ActiveRunnerInfo"]
         """
         cutoff_time = time() - timeout_seconds
@@ -553,20 +824,11 @@ class MongoOrchestrator(BaseOrchestrator):
             query["allow_to_run_atomic_service"] = can_run_atomic_service
 
         docs = self.cols.orchestrator_runner_heartbeats.find(query).sort(
-            "creation_timestamp", 1
+            [("creation_timestamp", 1), ("runner_id", 1)]
         )
 
         active_runners = []
         for doc in docs:
-            # MongoDB stores datetimes as naive UTC - make them aware
-            last_service_start = doc.get("last_service_start")
-            if last_service_start is not None and last_service_start.tzinfo is None:
-                last_service_start = last_service_start.replace(tzinfo=UTC)
-
-            last_service_end = doc.get("last_service_end")
-            if last_service_end is not None and last_service_end.tzinfo is None:
-                last_service_end = last_service_end.replace(tzinfo=UTC)
-
             active_runners.append(
                 ActiveRunnerInfo(
                     runner_id=doc["runner_id"],
@@ -577,8 +839,6 @@ class MongoOrchestrator(BaseOrchestrator):
                         doc["last_heartbeat"], tz=UTC
                     ),
                     allow_to_run_atomic_service=doc["allow_to_run_atomic_service"],
-                    last_service_start=last_service_start,
-                    last_service_end=last_service_end,
                 )
             )
 

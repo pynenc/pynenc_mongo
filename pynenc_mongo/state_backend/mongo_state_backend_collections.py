@@ -47,6 +47,7 @@ class StateBackendCollections(MongoCollections):
             indexes=[
                 IndexModel([("invocation_id", ASCENDING)], unique=True),
                 IndexModel([("parent_invocation_id", ASCENDING)]),
+                IndexModel([("parent_event_id", ASCENDING)]),
                 IndexModel([("workflow_id", ASCENDING)]),
                 IndexModel([("workflow_type_key", ASCENDING)]),
             ],

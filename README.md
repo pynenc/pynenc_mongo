@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://pynenc.org/assets/img/pynenc_logo.png" alt="Pynenc" width="300">
+  <img src="https://raw.githubusercontent.com/pynenc/pynenc/main/docs/_static/logo.png" alt="Pynenc" width="300">
 </p>
 <h1 align="center">Pynenc MongoDB Plugin</h1>
 <p align="center">
@@ -147,8 +147,8 @@ PYNENC__MONGO__MONGO_DB="pynenc"
 
 ## Requirements
 
-- Python >= 3.11
-- Pynenc >= 0.1.0
+- Python >= 3.12
+- Pynenc >= 0.3.0
 - pymongo >= 3.12.2
 - A running MongoDB server
 
