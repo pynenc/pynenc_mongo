@@ -11,8 +11,8 @@ from pynenc.app_info import AppInfo
 from pynenc.identifiers.call_id import CallId
 from pynenc.identifiers.invocation_id import InvocationId
 from pynenc.identifiers.task_id import TaskId
-from pynenc.invocation.dist_invocation import InvocationDTO
 from pynenc.models.call_dto import CallDTO
+from pynenc.models.invocation_dto import InvocationDTO
 from pynenc.runner.runner_context import RunnerContext
 from pynenc.state_backend.base_state_backend import BaseStateBackend, InvocationHistory
 from pynenc.types import Params, Result
@@ -110,6 +110,7 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
     ) -> None:
         """Store invocations with automatic argument chunking when needed."""
         for inv_dto, call_dto in entries:
+            workflow = inv_dto.workflow
             # Prepare arguments storage (inline or chunked)
             args_storage = prepare_chunk_storage(
                 self.cols.state_backend_chunks,
@@ -123,10 +124,13 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
                 "invocation_id": inv_dto.invocation_id,
                 "call_id_key": inv_dto.call_id.key,
                 "task_id_key": inv_dto.call_id.task_id.key,
-                "workflow_id": inv_dto.workflow.workflow_id,
-                "workflow_type_key": inv_dto.workflow.workflow_type.key,
-                "parent_workflow_id": inv_dto.workflow.parent_workflow_id,
+                "workflow_id": workflow.workflow_id if workflow else None,
+                "workflow_type_key": workflow.workflow_type.key if workflow else None,
+                "parent_workflow_id": (
+                    workflow.parent_workflow_id if workflow else None
+                ),
                 "parent_invocation_id": inv_dto.parent_invocation_id,
+                "parent_event_id": inv_dto.parent_event_id,
                 "arguments": args_storage,
             }
             self.cols.state_backend_invocations.insert_or_ignore(inv_dict)
@@ -159,11 +163,17 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
             doc["arguments"],
         )
         assert isinstance(serialized_arguments, dict)
-        p_w_id = doc["parent_workflow_id"]
-        workflow = WorkflowIdentity(
-            workflow_id=InvocationId(doc["workflow_id"]),
-            workflow_type=TaskId.from_key(doc["workflow_type_key"]),
-            parent_workflow_id=(InvocationId(p_w_id) if p_w_id else None),
+        workflow_id = doc.get("workflow_id")
+        workflow_type_key = doc.get("workflow_type_key")
+        p_w_id = doc.get("parent_workflow_id")
+        workflow = (
+            WorkflowIdentity(
+                workflow_id=InvocationId(workflow_id),
+                workflow_type=TaskId.from_key(workflow_type_key),
+                parent_workflow_id=(InvocationId(p_w_id) if p_w_id else None),
+            )
+            if workflow_id and workflow_type_key
+            else None
         )
         p_i_id = doc["parent_invocation_id"]
         inv_dto = InvocationDTO(
@@ -171,6 +181,7 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
             call_id=CallId.from_key(doc["call_id_key"]),
             workflow=workflow,
             parent_invocation_id=(InvocationId(p_i_id) if p_i_id else None),
+            parent_event_id=doc.get("parent_event_id") or None,
         )
         call_dto = CallDTO(inv_dto.call_id, serialized_arguments)
         return inv_dto, call_dto
@@ -468,6 +479,16 @@ class MongoStateBackend(BaseStateBackend[Params, Result]):
         """
         docs = self.cols.state_backend_invocations.find(
             {"parent_invocation_id": parent_invocation_id}
+        )
+        for doc in docs:
+            yield InvocationId(doc["invocation_id"])
+
+    def get_invocations_by_parent_event(
+        self, parent_event_id: str
+    ) -> Iterator["InvocationId"]:
+        """Return IDs of invocations created in response to ``parent_event_id``."""
+        docs = self.cols.state_backend_invocations.find(
+            {"parent_event_id": parent_event_id}
         )
         for doc in docs:
             yield InvocationId(doc["invocation_id"])

@@ -1,7 +1,7 @@
 from functools import cached_property
 from typing import TYPE_CHECKING
 
-from pymongo import ASCENDING, IndexModel
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
 from pynenc_mongo.util.mongo_collections import CollectionSpec, MongoCollections
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 class TriggerCollections(MongoCollections):
     """Collections specific to MongoTrigger with prefix trg_."""
 
-    def __init__(self, conf: "ConfigMongo", app_id: str):
+    def __init__(self, conf: "ConfigMongo", app_id: str) -> None:
         super().__init__(conf, prefix="trg_", app_id=app_id)
 
     @cached_property
@@ -61,9 +61,10 @@ class TriggerCollections(MongoCollections):
             name="trg_source_task_conditions",
             indexes=[
                 IndexModel(
-                    [("task_id", ASCENDING), ("condition_id", ASCENDING)], unique=True
+                    [("task_id_key", ASCENDING), ("condition_id", ASCENDING)],
+                    unique=True,
                 ),
-                IndexModel([("task_id", ASCENDING)]),
+                IndexModel([("task_id_key", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)
@@ -86,6 +87,40 @@ class TriggerCollections(MongoCollections):
             indexes=[
                 IndexModel([("trigger_run_id", ASCENDING)], unique=True),
                 IndexModel([("expiration", ASCENDING)]),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def trg_events(self) -> "RetryableCollection":
+        spec = CollectionSpec(
+            name="trg_events",
+            indexes=[
+                IndexModel([("event_id", ASCENDING)], unique=True),
+                IndexModel([("timestamp", DESCENDING)]),
+                IndexModel([("event_code", ASCENDING), ("timestamp", DESCENDING)]),
+                IndexModel([("matched", ASCENDING)]),
+                IndexModel([("triggered", ASCENDING)]),
+                IndexModel([("emitted_by_invocation_id", ASCENDING)]),
+                IndexModel([("emitted_by_task_id", ASCENDING)]),
+                IndexModel([("triggered_invocation_ids", ASCENDING)]),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def trg_trigger_runs(self) -> "RetryableCollection":
+        spec = CollectionSpec(
+            name="trg_trigger_runs",
+            indexes=[
+                IndexModel([("trigger_run_id", ASCENDING)], unique=True),
+                IndexModel([("sort_time", DESCENDING)]),
+                IndexModel([("event_ids", ASCENDING)]),
+                IndexModel([("event_codes", ASCENDING), ("sort_time", DESCENDING)]),
+                IndexModel([("source_invocation_ids", ASCENDING)]),
+                IndexModel([("triggered_invocation_id", ASCENDING)]),
+                IndexModel([("valid_condition_ids", ASCENDING)]),
+                IndexModel([("task_id_key", ASCENDING), ("sort_time", DESCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)

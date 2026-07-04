@@ -312,7 +312,7 @@ def get_conn_key(conf: "ConfigMongo") -> str:
 
 def get_conn_args(conf: "ConfigMongo") -> dict[str, str | int | None]:
     """Generate connection arguments for MongoClient based on configuration."""
-    args = {}
+    args: dict[str, str | int | None] = {}
     if conf.mongo_url:
         args["host"] = conf.mongo_url
     else:

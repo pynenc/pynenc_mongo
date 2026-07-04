@@ -65,7 +65,54 @@ class OrchestratorCollections(MongoCollections):
             indexes=[
                 IndexModel([("runner_id", ASCENDING)], unique=True),
                 IndexModel([("last_heartbeat", ASCENDING)]),
-                IndexModel([("creation_timestamp", ASCENDING)]),
+                IndexModel(
+                    [("creation_timestamp", ASCENDING), ("runner_id", ASCENDING)]
+                ),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def orchestrator_atomic_service_executions(self) -> "RetryableCollection":
+        spec = CollectionSpec(
+            name="orchestrator_atomic_service_executions",
+            indexes=[
+                IndexModel([("atomic_service_run_id", ASCENDING)], unique=True),
+                IndexModel([("start_time", ASCENDING)]),
+                IndexModel([("end_time", ASCENDING)]),
+                IndexModel([("runner_id", ASCENDING)]),
+            ],
+        )
+        return self.instantiate_retriable_coll(spec)
+
+    @cached_property
+    def orchestrator_atomic_service_active_execution(self) -> "RetryableCollection":
+        return self.instantiate_retriable_coll(
+            CollectionSpec(
+                name="orchestrator_atomic_service_active_execution",
+                indexes=[
+                    IndexModel([("atomic_service_run_id", ASCENDING)]),
+                ],
+            )
+        )
+
+    @cached_property
+    def orchestrator_atomic_service_events(self) -> "RetryableCollection":
+        spec = CollectionSpec(
+            name="orchestrator_atomic_service_events",
+            indexes=[
+                # Dedup key: same cycle/slot/runner/reason collapses to one doc.
+                IndexModel(
+                    [
+                        ("cycle_start", ASCENDING),
+                        ("slot_start", ASCENDING),
+                        ("assigned_runner_id", ASCENDING),
+                        ("reason", ASCENDING),
+                    ],
+                    unique=True,
+                    name="atomic_service_event_dedup",
+                ),
+                IndexModel([("created_at", ASCENDING)]),
             ],
         )
         return self.instantiate_retriable_coll(spec)
