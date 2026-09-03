@@ -943,7 +943,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/97/79/9382c00183979e6ce
 
 [[package]]
 name = "pynenc"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cistell" },
@@ -952,9 +952,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/60/43/0dde32158e4515a65074643d72ff06b7081b98d274009b11861fa650314b/pynenc-0.3.0.tar.gz", hash = "sha256:215efcb37bf72d2682aa40d1978150e5db1814ba5b0d536f6decd3e32486c279", size = 4911459, upload-time = "2026-07-01T19:06:57.362Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/08/0b002cac249570d056f54ff8a0ac1a2653365e6659764c1cacd276fa8ac0/pynenc-0.4.0.tar.gz", hash = "sha256:742eec1a6ab8c172deb9ff6c61e004f396d45750834a140cc351415446a384a5", size = 4944015, upload-time = "2026-09-03T05:39:07.595Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/93/4f5294bcd7b719aeaca1f22e4ecc13272466e60dd21609d1c1f0a8e4c0a0/pynenc-0.3.0-py3-none-any.whl", hash = "sha256:f93af7081e8464971d7205e7d4132da545091da22f6cbf02f9e96c50e0efe71d", size = 1218211, upload-time = "2026-07-01T19:06:55.34Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/a0/f0e5833e14e213a1520c68b696edbfc51539b2722234aea7080a32225e6d/pynenc-0.4.0-py3-none-any.whl", hash = "sha256:a81fbcc544ec1f619f8af1a287f2bdd524729a29e762c7e2bb68658cb99b1f26", size = 1254977, upload-time = "2026-09-03T05:39:05.295Z" },
 ]
 
 [package.optional-dependencies]
@@ -982,7 +982,7 @@ tests = [
 
 [[package]]
 name = "pynenc-mongo"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "pymongo" },
@@ -1024,7 +1024,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "pymongo", specifier = ">=3.12.2,<3.13" },
-    { name = "pynenc", specifier = ">=0.3.0" },
+    { name = "pynenc", specifier = ">=0.4.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -1052,8 +1052,8 @@ docs = [
     { name = "sphinx-design", specifier = ">=0.6.0" },
     { name = "sphinx-inline-tabs", specifier = ">=2023.4.21" },
 ]
-monitor = [{ name = "pynenc", extras = ["monitor"], specifier = ">=0.3.0" }]
-tests = [{ name = "pynenc", extras = ["tests"], specifier = ">=0.3.0" }]
+monitor = [{ name = "pynenc", extras = ["monitor"], specifier = ">=0.4.0" }]
+tests = [{ name = "pynenc", extras = ["tests"], specifier = ">=0.4.0" }]
 
 [[package]]
 name = "pytest"

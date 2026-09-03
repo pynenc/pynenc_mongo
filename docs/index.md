@@ -22,7 +22,7 @@ pip install pynenc-mongo
 | Component             | Class                  | Role                                                               |
 | --------------------- | ---------------------- | ------------------------------------------------------------------ |
 | **Orchestrator**      | `MongoOrchestrator`    | Invocation lifecycle, ownership consensus & blocking control       |
-| **Broker**            | `MongoBroker`          | FIFO message queue using MongoDB collections                       |
+| **Broker**            | `MongoBroker`          | Named priority queues with atomic dequeue                          |
 | **State Backend**     | `MongoStateBackend`    | Persistent state, results & exceptions with auto document chunking |
 | **Client Data Store** | `MongoClientDataStore` | Argument caching with compression for large payloads               |
 | **Trigger**           | `MongoTrigger`         | Event-driven & cron-based scheduling with distributed claims       |

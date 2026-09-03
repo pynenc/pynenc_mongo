@@ -37,7 +37,7 @@ The `pynenc-mongo` plugin provides all five Pynenc backend components running on
 | Component             | Class                  | Role                                                               |
 | --------------------- | ---------------------- | ------------------------------------------------------------------ |
 | **Orchestrator**      | `MongoOrchestrator`    | Invocation lifecycle, ownership consensus & blocking control       |
-| **Broker**            | `MongoBroker`          | FIFO message queue using MongoDB collections                       |
+| **Broker**            | `MongoBroker`          | Named priority queues using atomic MongoDB dequeue                 |
 | **State Backend**     | `MongoStateBackend`    | Persistent state, results & exceptions with auto document chunking |
 | **Client Data Store** | `MongoClientDataStore` | Argument caching with compression for large payloads               |
 | **Trigger**           | `MongoTrigger`         | Event-driven & cron-based scheduling with distributed claims       |
@@ -77,6 +77,13 @@ pynenc --app=tasks.app runner start
 ```
 
 ## Configuration
+
+### Queues and Priorities
+
+MongoDB stores each logical queue and its native float priority in the broker
+collection. Higher priorities run first within a queue, while equal priorities
+remain FIFO. Configure queues, task priorities, runner subscriptions, and
+wildcard priority rules through Pynenc's standard configuration.
 
 ### Builder Parameters
 
@@ -148,7 +155,7 @@ PYNENC__MONGO__MONGO_DB="pynenc"
 ## Requirements
 
 - Python >= 3.12
-- Pynenc >= 0.3.0
+- Pynenc >= 0.4.0
 - pymongo >= 3.12.2
 - A running MongoDB server
 
