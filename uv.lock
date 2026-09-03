@@ -943,18 +943,14 @@ sdist = { url = "https://files.pythonhosted.org/packages/97/79/9382c00183979e6ce
 
 [[package]]
 name = "pynenc"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.4.0"
+source = { editable = "../pynenc" }
 dependencies = [
     { name = "cistell" },
     { name = "croniter" },
     { name = "jsonpickle" },
     { name = "pyyaml" },
     { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/60/43/0dde32158e4515a65074643d72ff06b7081b98d274009b11861fa650314b/pynenc-0.3.0.tar.gz", hash = "sha256:215efcb37bf72d2682aa40d1978150e5db1814ba5b0d536f6decd3e32486c279", size = 4911459, upload-time = "2026-07-01T19:06:57.362Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/93/4f5294bcd7b719aeaca1f22e4ecc13272466e60dd21609d1c1f0a8e4c0a0/pynenc-0.3.0-py3-none-any.whl", hash = "sha256:f93af7081e8464971d7205e7d4132da545091da22f6cbf02f9e96c50e0efe71d", size = 1218211, upload-time = "2026-07-01T19:06:55.34Z" },
 ]
 
 [package.optional-dependencies]
@@ -980,9 +976,48 @@ tests = [
     { name = "types-requests" },
 ]
 
+[package.metadata]
+requires-dist = [
+    { name = "cistell", specifier = ">=0.1.2" },
+    { name = "coverage", extras = ["toml"], marker = "extra == 'tests'", specifier = ">=7.2.6" },
+    { name = "croniter", specifier = ">=6.0.0" },
+    { name = "fastapi", marker = "extra == 'monitor'", specifier = ">=0.115.0" },
+    { name = "httpx", marker = "extra == 'tests'", specifier = ">=0.27.0" },
+    { name = "jinja2", marker = "extra == 'monitor'", specifier = ">=3.1.0" },
+    { name = "jsonpickle", specifier = ">=4.1.0" },
+    { name = "mypy", marker = "extra == 'tests'", specifier = ">=1.7.0" },
+    { name = "pre-commit", marker = "extra == 'tests'", specifier = ">=3.5.0" },
+    { name = "psutil", marker = "extra == 'tests'", specifier = ">=7.0.0" },
+    { name = "pytest", marker = "extra == 'tests'", specifier = ">=7.4.4" },
+    { name = "pytest-asyncio", marker = "extra == 'tests'", specifier = ">=0.18.3" },
+    { name = "pytest-cov", marker = "extra == 'tests'", specifier = ">=6.0.0" },
+    { name = "pytest-timeout", marker = "extra == 'tests'", specifier = ">=2.2.0" },
+    { name = "pytest-xdist", marker = "extra == 'tests'", specifier = ">=3.5.0" },
+    { name = "python-multipart", marker = "extra == 'monitor'", specifier = ">=0.0.6" },
+    { name = "pyyaml", specifier = ">=6.0.1" },
+    { name = "requests", marker = "extra == 'tests'", specifier = ">=2.31.0" },
+    { name = "types-pyyaml", marker = "extra == 'tests'", specifier = ">=6.0.0" },
+    { name = "types-requests", marker = "extra == 'tests'", specifier = ">=2.32.0" },
+    { name = "typing-extensions", specifier = ">=4.9.0" },
+    { name = "uvicorn", marker = "extra == 'monitor'", specifier = ">=0.34.0" },
+]
+provides-extras = ["monitor", "tests"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "black", specifier = "==26.3.1" }]
+docs = [
+    { name = "furo", specifier = ">=2024" },
+    { name = "myst-parser", specifier = ">=4.0" },
+    { name = "sphinx", specifier = ">=8.0,<10" },
+    { name = "sphinx-autodoc2", specifier = ">=0.5.0" },
+    { name = "sphinx-copybutton", specifier = ">=0.5.2" },
+    { name = "sphinx-design", specifier = ">=0.6.0" },
+    { name = "sphinx-inline-tabs", specifier = ">=2023.4.21" },
+]
+
 [[package]]
 name = "pynenc-mongo"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "pymongo" },
@@ -1024,7 +1059,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "pymongo", specifier = ">=3.12.2,<3.13" },
-    { name = "pynenc", specifier = ">=0.3.0" },
+    { name = "pynenc", editable = "../pynenc" },
 ]
 
 [package.metadata.requires-dev]
@@ -1052,8 +1087,8 @@ docs = [
     { name = "sphinx-design", specifier = ">=0.6.0" },
     { name = "sphinx-inline-tabs", specifier = ">=2023.4.21" },
 ]
-monitor = [{ name = "pynenc", extras = ["monitor"], specifier = ">=0.3.0" }]
-tests = [{ name = "pynenc", extras = ["tests"], specifier = ">=0.3.0" }]
+monitor = [{ name = "pynenc", extras = ["monitor"], editable = "../pynenc" }]
+tests = [{ name = "pynenc", extras = ["tests"], editable = "../pynenc" }]
 
 [[package]]
 name = "pytest"

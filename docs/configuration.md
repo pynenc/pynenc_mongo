@@ -3,6 +3,13 @@
 All settings can be provided via the builder, environment variables, or YAML config files.
 See the [Pynenc configuration guide](https://pynenc.readthedocs.io/en/latest/configuration/index.html) for the general mechanism.
 
+## Broker Queues and Priorities
+
+`MongoBroker` implements Pynenc named queues and native float priorities. The
+highest priority is dequeued first within each queue; equal priorities preserve
+insertion order. The storage shape changed in 0.4.0; existing broker documents
+from earlier releases are not migrated and must be cleared or recreated.
+
 ## Connection Settings — `ConfigMongo`
 
 | Setting             | Type  | Default       | Description                                                                                       |
