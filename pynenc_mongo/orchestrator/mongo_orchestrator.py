@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
 from time import sleep, time
@@ -501,6 +501,7 @@ class MongoOrchestrator(BaseOrchestrator):
         self,
         runner_ids: list[str],
         can_run_atomic_service: bool = False,
+        consumed_queues: Sequence[str] | None = None,
     ) -> None:
         """
         Register or update runners' heartbeat timestamp.
@@ -511,20 +512,27 @@ class MongoOrchestrator(BaseOrchestrator):
         current_time = time()
         for runner_id in runner_ids:
             self.app.logger.debug(f"Registering heartbeat for runner: {runner_id}")
-            self.cols.orchestrator_runner_heartbeats.update_one(
-                {"runner_id": runner_id},
-                {
-                    "$set": {
-                        "runner_id": runner_id,
-                        "last_heartbeat": current_time,
-                        "allow_to_run_atomic_service": can_run_atomic_service,
+            heartbeat = {
+                "runner_id": runner_id,
+                "last_heartbeat": current_time,
+                "allow_to_run_atomic_service": can_run_atomic_service,
+                "consumed_queues": list(consumed_queues or ()),
+            }
+            try:
+                self.cols.orchestrator_runner_heartbeats.update_one(
+                    {"runner_id": runner_id},
+                    {
+                        "$set": heartbeat,
+                        "$setOnInsert": {"creation_timestamp": current_time},
                     },
-                    "$setOnInsert": {
-                        "creation_timestamp": current_time,
-                    },
-                },
-                upsert=True,
-            )
+                    upsert=True,
+                )
+            except DuplicateKeyError:
+                # A concurrent heartbeat won the upsert race and created the row.
+                # Update that row instead of treating a healthy runner as failed.
+                self.cols.orchestrator_runner_heartbeats.update_one(
+                    {"runner_id": runner_id}, {"$set": heartbeat}
+                )
 
     def record_atomic_service_execution_start(
         self,
@@ -839,6 +847,7 @@ class MongoOrchestrator(BaseOrchestrator):
                         doc["last_heartbeat"], tz=UTC
                     ),
                     allow_to_run_atomic_service=doc["allow_to_run_atomic_service"],
+                    consumed_queues=tuple(doc.get("consumed_queues", ())),
                 )
             )
 
